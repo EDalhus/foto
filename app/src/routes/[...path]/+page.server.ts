@@ -27,7 +27,7 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 			albumCount: node.albumCount,
 			latest: node.latest
 		},
-		crumbs: crumbs(node),
+		crumbs: crumbs(node, locals.user),
 		isAdmin: isAdmin(locals.user)
 	};
 

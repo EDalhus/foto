@@ -60,6 +60,7 @@ export const RESERVED = new Set([
 	'download',
 	'login',
 	'logout',
+	'koble',
 	'health',
 	'_app',
 	'favicon.svg',
@@ -153,8 +154,52 @@ export function isAdmin(user: SessionUser | null | undefined) {
 	return user?.role === 'admin';
 }
 
+// Gjester: hvilke mapper/album brukeren har fått tilgang til via gruppene sine. Bufres til neste invalidate().
+let grantCache: { version: number; byUser: Map<string, Set<string>> } = { version: -1, byUser: new Map() };
+
+export function grantedNodeIds(userId: string): Set<string> {
+	if (grantCache.version !== version) grantCache = { version, byUser: new Map() };
+	let set = grantCache.byUser.get(userId);
+	if (!set) {
+		set = new Set(
+			all<{ node_id: string }>(
+				`SELECT DISTINCT a.node_id FROM node_access a JOIN group_members m ON m.group_id = a.group_id WHERE m.user_id = ?`,
+				userId
+			).map((r) => r.node_id)
+		);
+		grantCache.byUser.set(userId, set);
+	}
+	return set;
+}
+
+/** Delt med brukeren: noden selv eller en mappe over den er delt med en av gruppene brukeren er med i. */
+export function isShared(node: TreeNode, user: SessionUser | null | undefined) {
+	if (!user || isAdmin(user)) return false;
+	const granted = grantedNodeIds(user.id);
+	if (!granted.size) return false;
+	for (let n: TreeNode | null = node; n; n = n.parent) if (granted.has(n.id)) return true;
+	return false;
+}
+
 export function canView(node: TreeNode, user: SessionUser | null | undefined) {
-	return !node.effectivePrivate || isAdmin(user);
+	return !node.effectivePrivate || isAdmin(user) || isShared(node, user);
+}
+
+/** Det som er delt direkte med brukeren (øverste nivå), til «Delt med deg». */
+export function sharedRoots(user: SessionUser | null | undefined): TreeNode[] {
+	if (!user || isAdmin(user)) return [];
+	const granted = grantedNodeIds(user.id);
+	const { byId } = getTree();
+	const out: TreeNode[] = [];
+	for (const id of granted) {
+		const n = byId.get(id);
+		if (!n || n.photoCount === 0) continue;
+		// Hopp over det som allerede ligger under noe annet som er delt.
+		let covered = false;
+		for (let p = n.parent; p; p = p.parent) if (granted.has(p.id)) covered = true;
+		if (!covered) out.push(n);
+	}
+	return out.sort((a, b) => b.latest - a.latest);
 }
 
 /** Barn som skal vises for denne brukeren. Tomme album skjules for besøkende. */

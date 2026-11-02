@@ -5,6 +5,7 @@
 	let { children } = $props();
 	const links = [
 		{ href: '/admin', label: 'Bibliotek', icon: 'folder' },
+		{ href: '/admin/gjester', label: 'Gjester', icon: 'users' },
 		{ href: '/admin/tokens', label: 'Lightroom og API', icon: 'key' },
 		{ href: '/admin/status', label: 'Status', icon: 'pulse' },
 		{ href: '/admin/account', label: 'Konto', icon: 'lock' }

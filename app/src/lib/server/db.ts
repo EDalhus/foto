@@ -84,6 +84,38 @@ const MIGRATIONS: string[] = [
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	);
+	`,
+	// 2: gjester – grupper (familie/kunde), medlemmer, tilgang til mapper/album og innloggingslenker.
+	`
+	CREATE TABLE groups (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT 'family' CHECK (kind IN ('family', 'client')),
+		created_at INTEGER NOT NULL
+	);
+	CREATE TABLE group_members (
+		group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (group_id, user_id)
+	);
+	CREATE INDEX group_members_user ON group_members (user_id);
+	CREATE TABLE node_access (
+		node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+		group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (node_id, group_id)
+	);
+	CREATE INDEX node_access_group ON node_access (group_id);
+	CREATE TABLE login_tokens (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		purpose TEXT NOT NULL CHECK (purpose IN ('login', 'invite')),
+		created_at INTEGER NOT NULL,
+		expires_at INTEGER NOT NULL
+	);
+	CREATE INDEX login_tokens_user ON login_tokens (user_id);
+	ALTER TABLE users ADD COLUMN last_login_at INTEGER;
 	`
 ];
 

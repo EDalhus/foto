@@ -19,9 +19,17 @@
 		{#if data.site.tagline}<p class="muted">{data.site.tagline}</p>{/if}
 	</section>
 
+	{#if data.shared.length}
+		<section class="shared" aria-labelledby="shared-h">
+			<h2 id="shared-h">Delt med deg</h2>
+			<CardGrid cards={data.shared} />
+		</section>
+		{#if data.cards.length}<h2 class="more">Alle album</h2>{/if}
+	{/if}
+
 	{#if data.cards.length}
 		<CardGrid cards={data.cards} />
-	{:else}
+	{:else if !data.shared.length}
 		<div class="empty">
 			<p>Ingen album er publisert ennå.</p>
 			{#if data.user?.isAdmin}
@@ -43,6 +51,18 @@
 	.intro p {
 		margin-top: 12px;
 		font-size: clamp(16px, 1.6vw, 19px);
+	}
+	.shared {
+		display: grid;
+		gap: 18px;
+		margin-bottom: clamp(36px, 5vw, 64px);
+	}
+	h2 {
+		font-size: 20px;
+		letter-spacing: -0.01em;
+	}
+	.more {
+		margin-bottom: 18px;
 	}
 	.empty {
 		padding: 48px 0;

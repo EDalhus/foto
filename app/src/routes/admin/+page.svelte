@@ -46,7 +46,7 @@
 				<span>Synlighet</span>
 				<select class="input" name="visibility">
 					<option value="public">Offentlig</option>
-					<option value="private">Privat – bare innloggede</option>
+					<option value="private">Privat – bare deg og gjester du deler med</option>
 				</select>
 			</label>
 		</div>

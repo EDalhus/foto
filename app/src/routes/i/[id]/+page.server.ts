@@ -17,6 +17,6 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 		photoId: photo.id,
 		photos,
 		album: { id: album.id, name: album.name, path: pathOf(album), isPrivate: album.effectivePrivate },
-		crumbs: crumbs(album)
+		crumbs: crumbs(album, locals.user)
 	};
 };

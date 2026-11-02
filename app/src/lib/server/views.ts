@@ -70,8 +70,11 @@ export function cardViews(nodes: TreeNode[], user: SessionUser | null): CardView
 	});
 }
 
-export function crumbs(node: TreeNode): Crumb[] {
-	return ancestors(node).map((a) => ({ name: a.name, path: pathOf(a) }));
+/** Brødsmuler. Mapper brukeren ikke har tilgang til (f.eks. en privat mappe over et delt album), vises ikke. */
+export function crumbs(node: TreeNode, user: SessionUser | null = null): Crumb[] {
+	return ancestors(node)
+		.filter((a) => canView(a, user))
+		.map((a) => ({ name: a.name, path: pathOf(a) }));
 }
 
 export function albumOf(p: Photo): TreeNode | null {

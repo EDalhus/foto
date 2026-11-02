@@ -18,6 +18,7 @@ import {
 	type TreeNode
 } from '$lib/server/tree';
 import { imageView } from '$lib/server/views';
+import { groupIdsWithAccess, inheritedAccess, listGroups, setAccess } from '$lib/server/guests';
 import type { Actions, PageServerLoad } from './$types';
 
 function albumOptions(exclude: string) {
@@ -73,6 +74,11 @@ export const load: PageServerLoad = ({ params }) => {
 			isPrivate: c.effectivePrivate
 		})),
 		photos,
+		sharing: (() => {
+			const direct = new Set(groupIdsWithAccess(node.id));
+			const inherited = new Map(inheritedAccess(node.id).map((i) => [i.groupId, i.via]));
+			return listGroups().map((g) => ({ id: g.id, name: g.name, kind: g.kind, direct: direct.has(g.id), via: inherited.get(g.id) ?? null }));
+		})(),
 		folders: folderOptions(node),
 		albums: node.type === 'album' ? albumOptions(node.id) : []
 	};
@@ -149,6 +155,13 @@ export const actions: Actions = {
 			const form = await request.formData();
 			updateNode(params.id, { coverPhotoId: String(form.get('photo') ?? '') || null });
 			return { message: 'Forsidebilde oppdatert.' };
+		}),
+
+	share: ({ request, params }) =>
+		guard(async () => {
+			const form = await request.formData();
+			setAccess(params.id, form.getAll('group').map(String));
+			return { message: 'Deling lagret.' };
 		}),
 
 	sortByDate: ({ params }) =>

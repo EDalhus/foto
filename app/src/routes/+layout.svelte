@@ -20,6 +20,11 @@
 					<form method="POST" action="/logout">
 						<button type="submit" class="linkish">Logg ut</button>
 					</form>
+				{:else if data.user}
+					<span class="who">{data.user.name || data.user.email}</span>
+					<form method="POST" action="/logout">
+						<button type="submit" class="linkish">Logg ut</button>
+					</form>
 				{/if}
 			</nav>
 		</div>
@@ -76,6 +81,12 @@
 	}
 	nav form {
 		margin: 0;
+	}
+	.who {
+		max-width: 40vw;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.linkish {
 		border: 0;

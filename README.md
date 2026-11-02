@@ -8,6 +8,7 @@ Kjører i dag på **https://foto.dalhus.net**.
 
 - **Mapper og album i flere nivåer.** Strukturen er virtuell – den finnes bare i databasen, aldri som mapper på disk.
 - **Offentlige og private album.** Private album (eller album i en privat mappe) krever innlogging. En lenke alene gir ingenting – heller ikke direkte lenker til bildefilene.
+- **Gjester: familie, venner og kunder.** Lag grupper under **Administrer → Gjester**, legg til personer og del mapper eller album med gruppa (eller del fra albumsiden). Gjester logger inn med en lenke på e-post – ingen passord – og ser det som er delt med dem under «Delt med deg». Deles en mappe, følger alt under med.
 - **Lightroom Classic-plugin** (publiseringstjeneste). Samlingssett blir mapper, samlinger blir album. Nye versjoner, sletting, navnebytter, flytting og rekkefølge følger med.
 - **Opplasting fra nettleseren** (dra og slipp) i admin.
 - **Nedlasting i full oppløsning** – enkeltbilder og hele album som zip – når det er slått på for albumet.
@@ -66,6 +67,17 @@ npm run dev
 ```
 
 Admin-brukeren opprettes fra `ADMIN_EMAIL`/`ADMIN_PASSWORD` første gang appen starter (passordet kan byttes under **Administrer → Konto**).
+
+### E-post (innloggingslenker til gjester)
+
+Sett `SMTP_HOST`, `SMTP_PORT` og `MAIL_FROM` (eventuelt `SMTP_USER`/`SMTP_PASS`, `SMTP_SECURE=true`). Uten `SMTP_HOST` skrives e-posten til loggen, og «Kopier lenke» i admin kan brukes i stedet. `deploy/docker-compose.yml` har en Postfix-container som bare sender og signerer med DKIM; legg den offentlige nøkkelen i DNS og ta med serverens IP i SPF.
+
+### Tester
+
+```sh
+cd app && npm run build && node test/gjester.test.mjs   # gjester, lenker og tilgang
+cd lightroom/test && bash kjor.sh                          # Lightroom-pluginen
+```
 
 ### Lagring av originaler
 

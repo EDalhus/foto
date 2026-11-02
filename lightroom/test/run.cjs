@@ -51,7 +51,7 @@ reg('__browser', (L) => {
   const origin = new URL(url).origin;
   if (loggedIn && !fs.existsSync(jar)) {
     execFileSync('curl', ['-s', '-o', '/dev/null', '-c', jar, '-H', `Origin: ${origin}`, '--data-urlencode', `email=${process.env.ADMIN_EMAIL}`,
-      '--data-urlencode', `password=${process.env.ADMIN_PASSWORD}`, `${origin}/login`]);
+      '--data-urlencode', `password=${process.env.ADMIN_PASSWORD}`, `${origin}/login?/password`]);
   }
   const args = ['-s', '-w', '\n%{http_code}', '-X', method, '-H', `Origin: ${origin}`];
   if (loggedIn) args.push('-b', jar);

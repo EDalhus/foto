@@ -223,7 +223,7 @@
 				<span>Synlighet</span>
 				<select class="input" name="visibility" value={node.visibility}>
 					<option value="public">Offentlig – alle kan se</option>
-					<option value="private">Privat – bare innloggede</option>
+					<option value="private">Privat – bare deg og gjester du deler med</option>
 				</select>
 			</label>
 			{#if node.effectivePrivate && node.visibility === 'public'}
@@ -237,6 +237,28 @@
 				<p class="hint">Gjelder besøkende. Du kan alltid laste ned selv når du er innlogget.</p>
 			{/if}
 			<button class="btn primary" type="submit">Lagre</button>
+		</form>
+
+		<form method="POST" action="?/share" use:enhance={() => async ({ update }) => update({ reset: false })} class="panel">
+			<h2>Deling</h2>
+			{#if data.sharing.length}
+				<p class="hint">
+					{node.effectivePrivate
+						? `Velg hvem som skal se ${node.type === 'album' ? 'albumet' : 'mappa med alt innhold'}.`
+						: `${node.type === 'album' ? 'Albumet' : 'Mappa'} er offentlig, så alle ser det. Deler du det, havner det også under «Delt med deg» hos gruppa.`}
+				</p>
+				<div class="groups">
+					{#each data.sharing as g (g.id)}
+						<label class="check">
+							<input type="checkbox" name="group" value={g.id} checked={g.direct || !!g.via} disabled={!!g.via && !g.direct} />
+							<span>{g.name}{#if g.via && !g.direct}{' '}<span class="faint">– via «{g.via}»</span>{/if}</span>
+						</label>
+					{/each}
+				</div>
+				<button class="btn" type="submit">Lagre deling</button>
+			{:else}
+				<p class="hint">Lag en gruppe under <a href="/admin/gjester">Gjester</a> for å dele med familie, venner eller kunder.</p>
+			{/if}
 		</form>
 
 		<div class="panel danger-zone">
@@ -475,6 +497,13 @@
 	.children .label {
 		flex: 1;
 		font-weight: 500;
+	}
+	.groups {
+		display: grid;
+		gap: 8px;
+	}
+	.hint a {
+		text-decoration: underline;
 	}
 	.side {
 		display: grid;
