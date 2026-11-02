@@ -1,0 +1,273 @@
+:root {
+	--bg: #0c0c0d;
+	--surface: #141416;
+	--surface-2: #1c1c1f;
+	--surface-3: #26262a;
+	--line: #2a2a2e;
+	--text: #ecebe8;
+	--muted: #a19f9a;
+	--faint: #6f6d69;
+	--accent: #e9e4da;
+	--accent-ink: #141416;
+	--danger: #ff6b5e;
+	--ok: #63d297;
+	--warn: #f2c14e;
+	--radius: 10px;
+	--gutter: clamp(16px, 4vw, 48px);
+	--max: 1680px;
+	--font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+	color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font);
+	font-size: 16px;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+img {
+	display: block;
+	max-width: 100%;
+}
+
+h1,
+h2,
+h3 {
+	margin: 0;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.15;
+}
+
+p {
+	margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+	color: inherit;
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.wrap {
+	width: 100%;
+	max-width: var(--max);
+	margin: 0 auto;
+	padding: 0 var(--gutter);
+}
+
+.muted {
+	color: var(--muted);
+}
+
+.faint {
+	color: var(--faint);
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* --- Knapper og skjema (brukes mest i admin) --- */
+
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.45em;
+	min-height: 38px;
+	padding: 0 14px;
+	border-radius: 999px;
+	border: 1px solid var(--line);
+	background: var(--surface-2);
+	color: var(--text);
+	font-size: 14px;
+	font-weight: 500;
+	cursor: pointer;
+	white-space: nowrap;
+	transition:
+		background 0.15s,
+		border-color 0.15s;
+}
+
+.btn:hover {
+	background: var(--surface-3);
+	border-color: #3a3a3f;
+}
+
+.btn.primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-ink);
+}
+
+.btn.primary:hover {
+	background: #fff;
+}
+
+.btn.danger {
+	color: var(--danger);
+}
+
+.btn.danger.solid {
+	background: var(--danger);
+	border-color: var(--danger);
+	color: #1a0d0b;
+}
+
+.btn.ghost {
+	background: transparent;
+	border-color: transparent;
+}
+
+.btn.ghost:hover {
+	background: var(--surface-2);
+}
+
+.btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.btn svg {
+	width: 16px;
+	height: 16px;
+	flex: none;
+}
+
+.field {
+	display: grid;
+	gap: 6px;
+}
+
+.field > span {
+	font-size: 13px;
+	color: var(--muted);
+}
+
+.input,
+select.input,
+textarea.input {
+	width: 100%;
+	min-height: 40px;
+	padding: 8px 12px;
+	border-radius: 8px;
+	border: 1px solid var(--line);
+	background: var(--surface);
+	color: var(--text);
+}
+
+textarea.input {
+	min-height: 90px;
+	resize: vertical;
+}
+
+.input:focus {
+	outline: none;
+	border-color: #55555c;
+	box-shadow: 0 0 0 3px rgba(233, 228, 218, 0.12);
+}
+
+.check {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 15px;
+	cursor: pointer;
+}
+
+.check input {
+	width: 18px;
+	height: 18px;
+	accent-color: var(--accent);
+}
+
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 12px;
+	font-weight: 500;
+	background: var(--surface-3);
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.badge svg {
+	width: 12px;
+	height: 12px;
+}
+
+.badge.private {
+	background: rgba(242, 193, 78, 0.14);
+	color: var(--warn);
+}
+
+.badge.ok {
+	background: rgba(99, 210, 151, 0.14);
+	color: var(--ok);
+}
+
+.badge.bad {
+	background: rgba(255, 107, 94, 0.14);
+	color: var(--danger);
+}
+
+.notice {
+	padding: 12px 14px;
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	border: 1px solid var(--line);
+	font-size: 14px;
+}
+
+.notice.warn {
+	border-color: #b8862b;
+}
+.notice.error {
+	border-color: rgba(255, 107, 94, 0.4);
+	color: #ffb3ab;
+}
+
+.notice.success {
+	border-color: rgba(99, 210, 151, 0.4);
+	color: #b6f0cf;
+}

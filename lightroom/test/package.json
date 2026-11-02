@@ -1,0 +1,12 @@
+{
+  "name": "foto-lightroom-test",
+  "private": true,
+  "description": "Tester Lightroom-pluginen i fengari (Lua i Node) mot en midlertidig lokal Foto-server.",
+  "scripts": {
+    "test": "bash kjor.sh"
+  },
+  "devDependencies": {
+    "fengari": "0.1.4",
+    "luaparse": "0.3.1"
+  }
+}
