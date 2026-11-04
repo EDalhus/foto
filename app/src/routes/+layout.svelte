@@ -2,9 +2,16 @@
 	import '../app.css';
 	import { page } from '$app/state';
 	import Icon from '$lib/components/Icon.svelte';
+	import SearchPalette from '$lib/components/SearchPalette.svelte';
+	import { onMount } from 'svelte';
 
 	let { data, children } = $props();
 	const inAdmin = $derived(page.url.pathname.startsWith('/admin'));
+	let palette = $state<SearchPalette>();
+	let mac = $state(true);
+	onMount(() => {
+		mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+	});
 </script>
 
 <div class="shell">
@@ -13,8 +20,18 @@
 			<a class="brand" href="/">{data.site.title}</a>
 			<nav>
 				{#if !inAdmin}
-					<a class="search" href="/sok" aria-label="Søk" aria-current={page.url.pathname === '/sok' ? 'page' : undefined}>
-						<Icon name="search" size={17} /> <span>Søk</span>
+					<a
+						class="search"
+						href="/sok"
+						aria-label="Søk"
+						aria-keyshortcuts={mac ? 'Meta+K' : 'Control+K'}
+						onclick={(e) => {
+							if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+							e.preventDefault();
+							palette?.show();
+						}}
+					>
+						<Icon name="search" size={17} /> <span>Søk</span> <kbd>{mac ? '⌘' : 'Ctrl '}K</kbd>
 					</a>
 				{/if}
 				{#if data.user?.isAdmin}
@@ -39,6 +56,8 @@
 	<main>
 		{@render children()}
 	</main>
+
+	{#if !inAdmin}<SearchPalette bind:this={palette} />{/if}
 
 	<footer class="foot">
 		<div class="wrap row">
@@ -93,8 +112,23 @@
 		align-items: center;
 		gap: 6px;
 	}
+	.search kbd {
+		font: inherit;
+		font-size: 11px;
+		line-height: 1;
+		padding: 3px 5px;
+		border: 1px solid var(--line);
+		border-radius: 5px;
+		color: var(--faint);
+	}
 	@media (max-width: 520px) {
-		.search span {
+		.search span,
+		.search kbd {
+			display: none;
+		}
+	}
+	@media (hover: none) {
+		.search kbd {
 			display: none;
 		}
 	}

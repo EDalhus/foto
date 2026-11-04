@@ -43,3 +43,14 @@ export interface Crumb {
 	name: string;
 	path: string;
 }
+
+/** Et treff i søkeboksen (⌘K). */
+export interface SearchHit {
+	id: string;
+	kind: 'folder' | 'album' | 'photo';
+	name: string;
+	href: string;
+	meta: string;
+	isPrivate: boolean;
+	thumb: { src: string; srcset: string; color: string | null } | null;
+}

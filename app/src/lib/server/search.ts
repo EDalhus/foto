@@ -57,9 +57,19 @@ export function search(q: string, user: SessionUser | null, limit = 300): { node
 	const matches = (text: string) => words.every((w) => text.includes(w));
 	const { byId } = getTree();
 
+	// Navn som begynner med søket kommer først, deretter ord i navnet, så resten – nyeste først innenfor hver gruppe.
+	const first = words[0];
+	const score = (n: TreeNode) => {
+		const name = normalize(n.name);
+		if (name.startsWith(first)) return 0;
+		if (name.split(/[^a-z0-9æøå]+/).some((w) => w.startsWith(first))) return 1;
+		return 2;
+	};
 	const nodes = [...byId.values()]
 		.filter((n) => n.photoCount > 0 && canView(n, user) && matches(normalize(`${n.name} ${n.description}`)))
-		.sort((a, b) => b.latest - a.latest)
+		.map((n) => ({ n, s: score(n) }))
+		.sort((a, b) => a.s - b.s || b.n.latest - a.n.latest)
+		.map((x) => x.n)
 		.slice(0, 48);
 
 	const allowed = new Map<string, boolean>();

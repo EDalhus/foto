@@ -317,6 +317,22 @@ check((await ola.get('/sok?q=bryllup+kake')).text.includes(`/i/${k2}`) && !(awai
 check((await anon.get('/sok?q=fjordtur')).text.includes('href="/fjordtur"'), 'finner album på navn');
 check((await anon.get('/')).text.includes('href="/sok"'), 'søkelenke i toppen');
 
+// Søkeboksen (⌘K) henter fra /api/v1/search.
+const sj = async (b, qs) => JSON.parse((await b.get(`/api/v1/search?q=${encodeURIComponent(qs)}`)).text);
+const names = (r) => r.nodes.map((n) => n.name);
+const ids = (r) => r.photos.map((p) => p.id);
+const p0 = await sj(anon, '');
+check(names(p0).includes('Fjordtur') && !names(p0).includes('Kunde') && !names(p0).includes('Familie'), 'søkeboks: forslag uten søkeord viser bare offentlige album for besøkende');
+const pOla = await sj(ola, '');
+check(names(pOla).includes('Kunde') && !names(pOla).includes('Familie'), 'søkeboks: Ola får forslag med albumet som er delt med ham');
+check(names(await sj(admin, '')).includes('Familie'), 'søkeboks: admin ser alt');
+check(!ids(await sj(anon, 'bryllup')).length && !names(await sj(anon, 'kunde')).length, 'søkeboks: besøkende finner ikke private bilder eller album');
+check(ids(await sj(ola, 'bryllup')).includes(k1) && !ids(await sj(ola, 'bryllup')).includes(fam), 'søkeboks: Ola finner sine bilder, ikke andres');
+const pf = await sj(anon, 'kare fjorden');
+check(pf.photos[0]?.id === pub && pf.photos[0].href === `/i/${pub}` && pf.photos[0].thumb?.src, 'søkeboks: bildetreff med lenke og miniatyr');
+const pa = (await sj(anon, 'fjordtur')).nodes[0];
+check(pa?.href === '/fjordtur' && /bilde/.test(pa.meta), 'søkeboks: albumtreff med lenke og antall bilder');
+
 // --- Lysbildefremvisning -----------------------------------------------------------------------
 console.log('7. Lysbildefremvisning');
 const photoPage = await anon.get(`/i/${pub}`);

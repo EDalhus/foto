@@ -37,6 +37,8 @@ export interface TreeNode extends NodeRow {
 	firstPhotoId: string | null;
 	/** Nyeste opptaksdato (eller opplastingsdato) blant bildene. */
 	latest: number;
+	/** Eldste opptaksdato (eller opplastingsdato) blant bildene. */
+	earliest: number;
 	/** Privat selv, eller ligger under en privat mappe. */
 	effectivePrivate: boolean;
 }
@@ -88,8 +90,8 @@ export function getTree(): Tree {
 	if (cached && cached.version === version) return cached.tree;
 	const v = version;
 	const rows = all<NodeRow>(`SELECT * FROM nodes`);
-	const stats = all<{ album_id: string; n: number; latest: number }>(
-		`SELECT album_id, count(*) AS n, max(coalesce(taken_at, created_at)) AS latest FROM photos GROUP BY album_id`
+	const stats = all<{ album_id: string; n: number; latest: number; earliest: number }>(
+		`SELECT album_id, count(*) AS n, max(coalesce(taken_at, created_at)) AS latest, min(coalesce(taken_at, created_at)) AS earliest FROM photos GROUP BY album_id`
 	);
 	const firsts = all<{ album_id: string; id: string }>(
 		`SELECT album_id, id FROM (
@@ -110,6 +112,7 @@ export function getTree(): Tree {
 			albumCount: 0,
 			firstPhotoId: firstMap.get(r.id) ?? null,
 			latest: s?.latest ?? r.created_at,
+			earliest: s?.earliest ?? r.created_at,
 			effectivePrivate: false
 		});
 	}
@@ -128,7 +131,9 @@ export function getTree(): Tree {
 			if (n.type === 'folder') {
 				n.photoCount = n.children.reduce((a, c) => a + c.photoCount, 0);
 				n.albumCount = n.children.reduce((a, c) => a + (c.type === 'album' ? 1 : c.albumCount), 0);
+				const filled = n.children.filter((c) => c.photoCount > 0);
 				n.latest = n.children.reduce((a, c) => Math.max(a, c.latest), n.created_at);
+				n.earliest = filled.reduce((a, c) => Math.min(a, c.earliest), filled.length ? Infinity : n.created_at);
 			}
 		}
 		list.sort(compareNodes);
