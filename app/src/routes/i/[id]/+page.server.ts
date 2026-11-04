@@ -1,6 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { getPhoto, listPhotos } from '$lib/server/photos';
-import { canView, pathOf } from '$lib/server/tree';
+import { favoriteIds } from '$lib/server/guests';
+import { canFavorite, canView, pathOf } from '$lib/server/tree';
 import { albumOf, crumbs, photoView } from '$lib/server/views';
 import type { PageServerLoad } from './$types';
 
@@ -17,6 +18,7 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 		photoId: photo.id,
 		photos,
 		album: { id: album.id, name: album.name, path: pathOf(album), isPrivate: album.effectivePrivate },
-		crumbs: crumbs(album, locals.user)
+		crumbs: crumbs(album, locals.user),
+		favorites: canFavorite(album, locals.user) ? favoriteIds(locals.user!.id, album.id) : null
 	};
 };

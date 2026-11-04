@@ -1,13 +1,18 @@
 import type { CardView, Crumb, ImageView, PhotoView } from '$lib/types';
 import type { SessionUser } from './auth';
 import { getPhotosByIds, type Photo } from './photos';
-import { ancestors, canView, getTree, isAdmin, pathOf, type TreeNode } from './tree';
+import { ancestors, canDownload, canView, getTree, pathOf, type TreeNode } from './tree';
+import { WATERMARKED, watermarkFor, wmName } from './watermark';
 
 export function mediaUrl(p: Pick<Photo, 'id' | 'version'>, file: string) {
 	return `/media/${p.id}/${p.version}/${file}`;
 }
 
-export function imageView(p: Photo): ImageView {
+/** Filnavnet i URL-en – med vannmerke hvis `wm` er satt og størrelsen skal ha det. */
+export const mediaFile = (file: string, wm: number | null = null) => (wm !== null && WATERMARKED.has(file) ? wmName(file, wm) : file);
+
+/** `wm`: vannmerkeversjon (fra watermarkFor), eller null for bildene uten. */
+export function imageView(p: Photo, wm: number | null = null): ImageView {
 	const sizes = p.sizes.length ? p.sizes : [{ name: 's', w: p.width, h: p.height }];
 	const mid = sizes.find((s) => s.name === 'm') ?? sizes[sizes.length - 1];
 	return {
@@ -15,21 +20,22 @@ export function imageView(p: Photo): ImageView {
 		w: p.width,
 		h: p.height,
 		color: p.color,
-		src: mediaUrl(p, `${mid.name}.webp`),
-		srcset: sizes.map((s) => `${mediaUrl(p, `${s.name}.webp`)} ${s.w}w`).join(', ')
+		src: mediaUrl(p, mediaFile(`${mid.name}.webp`, wm)),
+		srcset: sizes.map((s) => `${mediaUrl(p, mediaFile(`${s.name}.webp`, wm))} ${s.w}w`).join(', ')
 	};
 }
 
 export function photoView(p: Photo, album: TreeNode, user: SessionUser | null): PhotoView {
+	const wm = watermarkFor(album, user);
 	return {
-		...imageView(p),
+		...imageView(p, wm),
 		title: p.title,
 		caption: p.caption,
 		filename: p.filename,
 		takenAt: p.taken_at,
 		exif: p.exif,
-		download: album.allow_download || isAdmin(user) ? `/download/photo/${p.id}` : null,
-		og: mediaUrl(p, 'og.jpg')
+		download: canDownload(album, user) ? `/download/photo/${p.id}` : null,
+		og: mediaUrl(p, mediaFile('og.jpg', wm))
 	};
 }
 
@@ -65,7 +71,7 @@ export function cardViews(nodes: TreeNode[], user: SessionUser | null): CardView
 			albumCount: n.albumCount,
 			latest: n.latest,
 			isPrivate: n.effectivePrivate,
-			cover: cover ? imageView(cover) : null
+			cover: cover && coverAlbum ? imageView(cover, watermarkFor(coverAlbum, user)) : null
 		};
 	});
 }

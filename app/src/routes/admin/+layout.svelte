@@ -7,6 +7,7 @@
 		{ href: '/admin', label: 'Bibliotek', icon: 'folder' },
 		{ href: '/admin/gjester', label: 'Gjester', icon: 'users' },
 		{ href: '/admin/tokens', label: 'Lightroom og API', icon: 'key' },
+		{ href: '/admin/innstillinger', label: 'Innstillinger', icon: 'sliders' },
 		{ href: '/admin/status', label: 'Status', icon: 'pulse' },
 		{ href: '/admin/account', label: 'Konto', icon: 'lock' }
 	];

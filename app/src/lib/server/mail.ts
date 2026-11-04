@@ -1,6 +1,7 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 import { env } from '$env/dynamic/private';
 import { config } from './config';
+import { one } from './db';
 
 /**
  * Sender e-post via SMTP (på foto.dalhus.net: en egen Postfix-container på serveren).
@@ -69,4 +70,36 @@ export function loginMail(opts: { to: string; name: string; url: string; invite:
 <p style="margin:0;font-size:13px;line-height:1.5;color:#6b6b70">${esc(note)}</p>
 </div></body></html>`
 	};
+}
+
+/** Varsel til deg (administratoren). */
+export function noticeMail(opts: { to: string; subject: string; heading: string; lines: string[]; url?: string; button?: string; list?: string }): Mail {
+	const site = config.siteTitle;
+	const textList = opts.list ? `\n${opts.list}\n` : '';
+	return {
+		to: opts.to,
+		subject: opts.subject,
+		text: `${opts.heading}\n\n${opts.lines.join('\n\n')}\n${textList}${opts.url ? `\n${opts.url}\n` : ''}`,
+		html: `<!doctype html><html><body style="margin:0;padding:32px 16px;background:#f4f4f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1b1b1d">
+<div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;padding:28px">
+<p style="margin:0 0 6px;font-size:13px;color:#6b6b70">${esc(site)}</p>
+<h1 style="margin:0 0 16px;font-size:20px">${esc(opts.heading)}</h1>
+${opts.lines.map((l) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.5">${esc(l)}</p>`).join('\n')}
+${opts.list ? `<pre style="margin:0 0 18px;padding:12px;background:#f4f4f2;border-radius:8px;font-size:13px;white-space:pre-wrap;word-break:break-all">${esc(opts.list)}</pre>` : ''}
+${opts.url ? `<p style="margin:8px 0 0"><a href="${esc(opts.url)}" style="display:inline-block;background:#1b1b1d;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">${esc(opts.button ?? 'Åpne')}</a></p>` : ''}
+</div></body></html>`
+	};
+}
+
+/** Adressen varsler sendes til: NOTIFY_EMAIL, ellers administratorens e-post. */
+function adminAddress(): string | null {
+	if (env.NOTIFY_EMAIL === 'off') return null;
+	return env.NOTIFY_EMAIL || one<{ email: string }>(`SELECT email FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1`)?.email || null;
+}
+
+/** Sender et varsel i bakgrunnen. Feil logges, men stopper aldri det gjesten holder på med. */
+export function notifyAdmin(build: (to: string) => Mail): void {
+	const to = adminAddress();
+	if (!to) return;
+	sendMail(build(to)).catch((err) => console.error('[foto] Kunne ikke sende varsel:', err));
 }

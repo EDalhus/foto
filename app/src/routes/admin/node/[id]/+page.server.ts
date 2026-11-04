@@ -18,7 +18,7 @@ import {
 	type TreeNode
 } from '$lib/server/tree';
 import { imageView } from '$lib/server/views';
-import { groupIdsWithAccess, inheritedAccess, listGroups, setAccess } from '$lib/server/guests';
+import { favoritesInAlbum, groupIdsWithAccess, inheritedAccess, listGroups, setAccess } from '$lib/server/guests';
 import type { Actions, PageServerLoad } from './$types';
 
 function albumOptions(exclude: string) {
@@ -77,8 +77,16 @@ export const load: PageServerLoad = ({ params }) => {
 		sharing: (() => {
 			const direct = new Set(groupIdsWithAccess(node.id));
 			const inherited = new Map(inheritedAccess(node.id).map((i) => [i.groupId, i.via]));
-			return listGroups().map((g) => ({ id: g.id, name: g.name, kind: g.kind, direct: direct.has(g.id), via: inherited.get(g.id) ?? null }));
+			return listGroups().map((g) => ({
+				id: g.id,
+				name: g.name,
+				kind: g.kind,
+				download: g.download,
+				direct: direct.has(g.id),
+				via: inherited.get(g.id) ?? null
+			}));
 		})(),
+		favorites: node.type === 'album' ? favoritesInAlbum(node.id) : [],
 		folders: folderOptions(node),
 		albums: node.type === 'album' ? albumOptions(node.id) : []
 	};

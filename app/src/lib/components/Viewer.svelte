@@ -9,14 +9,21 @@
 		index,
 		onnavigate,
 		onclose,
-		albumName = ''
+		albumName = '',
+		favorites = null,
+		ontogglefavorite
 	}: {
 		photos: PhotoView[];
 		index: number;
 		onnavigate: (id: string) => void;
 		onclose: () => void;
 		albumName?: string;
+		/** Bilder gjesten har valgt. null = favoritter er ikke tilgjengelig her. */
+		favorites?: Set<string> | null;
+		ontogglefavorite?: (id: string) => void;
 	} = $props();
+
+	const SLIDE_MS = 5000;
 
 	const photo = $derived(photos[index]);
 	const camera = $derived(photo ? formatCamera(photo.exif) : '');
@@ -39,14 +46,44 @@
 		if (next) onnavigate(next.id);
 	}
 
+	// --- Lysbildefremvisning ---
+	let playing = $state(false);
+	const isFav = $derived(!!favorites && !!photo && favorites.has(photo.id));
+
+	function toggleSlideshow() {
+		playing = !playing;
+		if (playing) {
+			showInfo = false;
+			// Fullskjerm der nettleseren støtter det (ikke på iPhone – der er visningen allerede hele skjermen).
+			if (document.fullscreenEnabled && !document.fullscreenElement) dialog?.requestFullscreen?.().catch(() => {});
+		} else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+	}
+
+	// Neste bilde etter noen sekunder; starter på nytt fra begynnelsen etter det siste.
+	$effect(() => {
+		if (!playing || photos.length < 2) return;
+		void index;
+		const t = setTimeout(() => onnavigate((photos[index + 1] ?? photos[0]).id), SLIDE_MS);
+		return () => clearTimeout(t);
+	});
+
+	function close() {
+		playing = false;
+		if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+		onclose();
+	}
+
 	function onkeydown(e: KeyboardEvent) {
 		if (e.metaKey || e.ctrlKey || e.altKey) return;
 		if (e.key === 'ArrowRight') go(1);
 		else if (e.key === 'ArrowLeft') go(-1);
 		else if (e.key === 'Escape') {
-			if (showInfo && window.innerWidth < 900) showInfo = false;
-			else onclose();
+			if (playing) toggleSlideshow();
+			else if (showInfo && window.innerWidth < 900) showInfo = false;
+			else close();
 		} else if (e.key === 'i') showInfo = !showInfo;
+		else if (e.key === ' ' || e.key === 'p') toggleSlideshow();
+		else if (e.key === 'f' && favorites && photo) ontogglefavorite?.(photo.id);
 		else return;
 		e.preventDefault();
 	}
@@ -74,7 +111,7 @@
 		const dy = e.clientY - start.y;
 		start = null;
 		if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.4) go(dx < 0 ? 1 : -1);
-		else if (dy > 100 && dy > Math.abs(dx) * 1.4) onclose();
+		else if (dy > 100 && dy > Math.abs(dx) * 1.4) close();
 	}
 
 	onMount(() => {
@@ -94,6 +131,7 @@
 	<div
 		class="viewer"
 		class:with-info={showInfo}
+		class:playing
 		role="dialog"
 		aria-modal="true"
 		aria-label={photo.title || albumName || 'Bilde'}
@@ -101,9 +139,33 @@
 		bind:this={dialog}
 	>
 		<header class="bar">
-			<button class="icon" onclick={onclose} aria-label="Lukk" title="Lukk (Esc)"><Icon name="x" size={22} /></button>
+			<button class="icon" onclick={close} aria-label="Lukk" title="Lukk (Esc)"><Icon name="x" size={22} /></button>
 			<span class="count">{index + 1} / {photos.length}</span>
 			<div class="actions">
+				{#if favorites}
+					<button
+						class="icon fav"
+						class:on={isFav}
+						onclick={() => ontogglefavorite?.(photo.id)}
+						aria-label={isFav ? 'Fjern fra favoritter' : 'Legg til i favoritter'}
+						aria-pressed={isFav}
+						title="Favoritt (f)"
+					>
+						<Icon name="heart" size={21} filled={isFav} />
+					</button>
+				{/if}
+				{#if photos.length > 1}
+					<button
+						class="icon"
+						class:on={playing}
+						onclick={toggleSlideshow}
+						aria-label={playing ? 'Stopp lysbildefremvisning' : 'Start lysbildefremvisning'}
+						aria-pressed={playing}
+						title="Lysbildefremvisning (mellomrom)"
+					>
+						<Icon name={playing ? 'pause' : 'play'} size={20} />
+					</button>
+				{/if}
 				{#if photo.download}
 					<a class="icon" href={photo.download} download aria-label="Last ned original" title="Last ned original">
 						<Icon name="download" size={21} />
@@ -151,6 +213,10 @@
 				<button class="nav next" onclick={() => go(1)} aria-label="Neste bilde"><Icon name="right" size={28} /></button>
 			{/if}
 		</div>
+
+		{#if playing}
+			{#key photo.id}<div class="progress" style:animation-duration="{SLIDE_MS}ms"></div>{/key}
+		{/if}
 
 		{#if (photo.title || photo.caption) && !showInfo}
 			<footer class="caption">
@@ -239,6 +305,46 @@
 	.icon:hover,
 	.icon.on {
 		background: rgba(255, 255, 255, 0.1);
+	}
+	.icon.fav.on {
+		color: #ff6b81;
+		background: transparent;
+	}
+	.icon.fav:hover {
+		background: rgba(255, 255, 255, 0.1);
+	}
+	/* Under fremvisning: skjul alt annet enn bildet til musa beveges eller man trykker på skjermen. */
+	.playing .bar,
+	.playing .caption {
+		opacity: 0;
+		transition: opacity 0.4s;
+	}
+	.playing:hover .bar,
+	.playing:focus-within .bar {
+		opacity: 1;
+	}
+	.playing .nav {
+		display: none;
+	}
+	.progress {
+		position: absolute;
+		left: 0;
+		bottom: 0;
+		height: 2px;
+		width: 100%;
+		background: rgba(255, 255, 255, 0.5);
+		transform-origin: left;
+		animation-name: grow;
+		animation-timing-function: linear;
+		z-index: 4;
+	}
+	@keyframes grow {
+		from {
+			transform: scaleX(0);
+		}
+		to {
+			transform: scaleX(1);
+		}
 	}
 	.stage {
 		grid-column: 1;

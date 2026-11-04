@@ -19,6 +19,10 @@
 		{#if data.site.tagline}<p class="muted">{data.site.tagline}</p>{/if}
 	</section>
 
+	{#if data.accessExpired}
+		<p class="notice warn">Tilgangen din til de delte bildene har utløpt. Ta kontakt med fotografen hvis du trenger den igjen.</p>
+	{/if}
+
 	{#if data.shared.length}
 		<section class="shared" aria-labelledby="shared-h">
 			<h2 id="shared-h">Delt med deg</h2>

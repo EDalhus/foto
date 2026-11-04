@@ -116,6 +116,25 @@ const MIGRATIONS: string[] = [
 	);
 	CREATE INDEX login_tokens_user ON login_tokens (user_id);
 	ALTER TABLE users ADD COLUMN last_login_at INTEGER;
+	`,
+	// 3: utløpsdato og nedlasting per gruppe, favoritter (kunden velger bilder).
+	`
+	ALTER TABLE groups ADD COLUMN expires_at INTEGER;
+	ALTER TABLE groups ADD COLUMN download TEXT NOT NULL DEFAULT 'album' CHECK (download IN ('album', 'yes', 'no'));
+	CREATE TABLE favorites (
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		photo_id TEXT NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (user_id, photo_id)
+	);
+	CREATE INDEX favorites_photo ON favorites (photo_id);
+	CREATE TABLE favorite_submissions (
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		album_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+		count INTEGER NOT NULL,
+		submitted_at INTEGER NOT NULL,
+		PRIMARY KEY (user_id, album_id)
+	);
 	`
 ];
 

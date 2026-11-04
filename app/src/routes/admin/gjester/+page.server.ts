@@ -5,6 +5,7 @@ import {
 	createGroup,
 	createLoginToken,
 	deleteGroup,
+	expiryDate,
 	getGroup,
 	getGuest,
 	grantAccess,
@@ -34,7 +35,13 @@ function nodeOptions() {
 }
 
 export const load: PageServerLoad = () => ({
-	groups: listGroups().map((g) => ({ ...g, members: membersOf(g.id), access: accessOf(g.id) })),
+	groups: listGroups().map((g) => ({
+		...g,
+		expiresDate: expiryDate(g.expires_at),
+		expired: !!g.expires_at && g.expires_at <= Date.now(),
+		members: membersOf(g.id),
+		access: accessOf(g.id)
+	})),
 	nodes: nodeOptions(),
 	mailReady: mailConfigured()
 });
@@ -74,7 +81,12 @@ export const actions: Actions = {
 	updateGroup: ({ request }) =>
 		guard(async () => {
 			const form = await request.formData();
-			updateGroup(String(form.get('group') ?? ''), form.get('name'), form.get('kind'));
+			updateGroup(String(form.get('group') ?? ''), {
+				name: form.get('name'),
+				kind: form.get('kind'),
+				expires: form.get('expires'),
+				download: form.get('download')
+			});
 			return { message: 'Lagret.' };
 		}),
 

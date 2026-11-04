@@ -4,7 +4,7 @@
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Uploader from '$lib/components/Uploader.svelte';
-	import { formatBytes, formatDate, plural } from '$lib/format';
+	import { formatBytes, formatDate, formatLocal, plural } from '$lib/format';
 
 	let { data, form } = $props();
 	const node = $derived(data.node);
@@ -30,6 +30,19 @@
 
 	const pending = $derived(data.photos.filter((p) => !p.stored).length);
 	const allSelected = $derived(data.photos.length > 0 && selected.length === data.photos.length);
+
+	// Filnavn uten endelse, skilt med mellomrom: lim inn i Lightroom-filteret «Tekst → Filnavn → Inneholder».
+	let copiedFor = $state<string | null>(null);
+	async function copyNames(userId: string, photos: { filename: string }[]) {
+		const text = photos.map((p) => p.filename.replace(/\.[^.]+$/, '')).join(' ');
+		try {
+			await navigator.clipboard.writeText(text);
+			copiedFor = userId;
+			setTimeout(() => (copiedFor = null), 2000);
+		} catch {
+			prompt('Kopier filnavnene:', text);
+		}
+	}
 
 	function toggle(id: string) {
 		selected = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
@@ -251,7 +264,11 @@
 					{#each data.sharing as g (g.id)}
 						<label class="check">
 							<input type="checkbox" name="group" value={g.id} checked={g.direct || !!g.via} disabled={!!g.via && !g.direct} />
-							<span>{g.name}{#if g.via && !g.direct}{' '}<span class="faint">– via «{g.via}»</span>{/if}</span>
+							<span
+								>{g.name}{#if g.via && !g.direct}{' '}<span class="faint">– via «{g.via}»</span>{/if}{#if g.download !== 'album'}{' '}<span
+										class="faint">· {g.download === 'yes' ? 'kan alltid laste ned' : 'kan ikke laste ned'}</span
+									>{/if}</span
+							>
 						</label>
 					{/each}
 				</div>
@@ -260,6 +277,33 @@
 				<p class="hint">Lag en gruppe under <a href="/admin/gjester">Gjester</a> for å dele med familie, venner eller kunder.</p>
 			{/if}
 		</form>
+
+		{#if node.type === 'album' && data.favorites.length}
+			<div class="panel" id="favoritter">
+				<h2>Favoritter</h2>
+				<p class="hint">Bildene gjestene har valgt med hjertet.</p>
+				<ul class="favs">
+					{#each data.favorites as f (f.user.id)}
+						<li>
+							<div>
+								<strong>{f.user.name || f.user.email}</strong>
+								<span class="faint">
+									{plural(f.photos.length, 'bilde', 'bilder')} · {f.submittedAt ? `sendt ${formatLocal(f.submittedAt)}` : 'ikke sendt ennå'}
+								</span>
+							</div>
+							<div class="buttons">
+								<button class="btn" type="button" onclick={() => copyNames(f.user.id, f.photos)}>
+									<Icon name={copiedFor === f.user.id ? 'check' : 'link'} size={16} />
+									{copiedFor === f.user.id ? 'Kopiert' : 'Kopier filnavn'}
+								</button>
+								<button class="btn ghost" type="button" onclick={() => (selected = f.photos.map((p) => p.id))}>Marker i albumet</button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+				<p class="hint">Lim filnavnene inn i Lightroom: Bibliotekfilter → Tekst → Filnavn → Inneholder.</p>
+			</div>
+		{/if}
 
 		<div class="panel danger-zone">
 			<h2>Slett</h2>
@@ -280,6 +324,24 @@
 </div>
 
 <style>
+	.favs {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 12px;
+	}
+	.favs li {
+		display: grid;
+		gap: 8px;
+	}
+	.favs li > div:first-child {
+		display: grid;
+		gap: 2px;
+	}
+	.favs .faint {
+		font-size: 13px;
+	}
 	.head {
 		display: flex;
 		flex-wrap: wrap;

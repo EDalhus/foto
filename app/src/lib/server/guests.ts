@@ -7,9 +7,10 @@
  */
 import { all, one, run, tx } from './db';
 import { newId, now, randomToken, sha256 } from './ids';
-import { getNode, HttpError, invalidate, pathOf } from './tree';
+import { getNode, HttpError, invalidate, pathOf, type GroupDownload } from './tree';
 
 export type GroupKind = 'family' | 'client';
+export type { GroupDownload };
 
 export const LOGIN_LINK_MINUTES = 30;
 export const INVITE_LINK_DAYS = 14;
@@ -19,6 +20,9 @@ export interface GroupRow {
 	name: string;
 	kind: GroupKind;
 	created_at: number;
+	/** Tilgangen slutter ved dette tidspunktet (null = aldri). */
+	expires_at: number | null;
+	download: GroupDownload;
 }
 
 export interface GuestRow {
@@ -45,18 +49,76 @@ function cleanText(value: unknown, what: string, max = 100, required = true): st
 }
 
 const kindOf = (value: unknown): GroupKind => (value === 'client' ? 'client' : 'family');
+const downloadOf = (value: unknown): GroupDownload => (value === 'yes' || value === 'no' ? value : 'album');
+
+/** Minutter Oslo ligger foran UTC på et gitt tidspunkt (60 eller 120). */
+function osloOffsetMinutes(t: number): number {
+	const name = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Oslo', timeZoneName: 'shortOffset' })
+		.formatToParts(t)
+		.find((p) => p.type === 'timeZoneName')?.value;
+	const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(name ?? '');
+	return m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) : 60;
+}
+
+/**
+ * «Tilgang til og med» fra et datofelt (ÅÅÅÅ-MM-DD) → midnatt norsk tid etter den dagen.
+ * Tomt felt = ingen utløpsdato.
+ */
+export function parseExpiry(value: unknown): number | null {
+	const s = String(value ?? '').trim();
+	if (!s) return null;
+	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+	if (!m) throw new HttpError(400, 'Ugyldig dato.');
+	const midnightUtc = Date.UTC(+m[1], +m[2] - 1, +m[3] + 1);
+	if (!Number.isFinite(midnightUtc)) throw new HttpError(400, 'Ugyldig dato.');
+	return midnightUtc - osloOffsetMinutes(midnightUtc) * 60_000;
+}
+
+/** Utløpstidspunktet tilbake til datoen i feltet (siste dag med tilgang). */
+export function expiryDate(expiresAt: number | null): string {
+	if (!expiresAt) return '';
+	return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Oslo' }).format(expiresAt - 1);
+}
 
 // --- Grupper ---
 
 export function createGroup(name: unknown, kind: unknown): string {
 	const id = newId();
-	run(`INSERT INTO groups (id, name, kind, created_at) VALUES (?, ?, ?, ?)`, id, cleanText(name, 'Navn'), kindOf(kind), now());
+	const k = kindOf(kind);
+	// Kunder får ikke laste ned før du har sagt ja (f.eks. når de har betalt).
+	run(
+		`INSERT INTO groups (id, name, kind, download, created_at) VALUES (?, ?, ?, ?, ?)`,
+		id,
+		cleanText(name, 'Navn'),
+		k,
+		k === 'client' ? 'no' : 'album',
+		now()
+	);
 	return id;
 }
 
-export function updateGroup(id: string, name: unknown, kind: unknown) {
-	if (!getGroup(id)) throw new HttpError(404, 'Gruppa finnes ikke.');
-	run(`UPDATE groups SET name = ?, kind = ? WHERE id = ?`, cleanText(name, 'Navn'), kindOf(kind), id);
+export function updateGroup(id: string, patch: { name?: unknown; kind?: unknown; expires?: unknown; download?: unknown }) {
+	const g = getGroup(id);
+	if (!g) throw new HttpError(404, 'Gruppa finnes ikke.');
+	run(
+		`UPDATE groups SET name = ?, kind = ?, expires_at = ?, download = ? WHERE id = ?`,
+		patch.name !== undefined ? cleanText(patch.name, 'Navn') : g.name,
+		patch.kind !== undefined ? kindOf(patch.kind) : g.kind,
+		patch.expires !== undefined ? parseExpiry(patch.expires) : g.expires_at,
+		patch.download !== undefined ? downloadOf(patch.download) : g.download,
+		id
+	);
+	invalidate();
+}
+
+/** Har gjesten grupper som har utløpt, og ingen som fortsatt gjelder? Brukes til å forklare en tom forside. */
+export function onlyExpired(userId: string): boolean {
+	const rows = all<{ expires_at: number | null }>(
+		`SELECT g.expires_at FROM group_members m JOIN groups g ON g.id = m.group_id WHERE m.user_id = ?`,
+		userId
+	);
+	const t = now();
+	return rows.length > 0 && rows.every((r) => r.expires_at !== null && r.expires_at <= t);
 }
 
 /** Sletter gruppa. Gjester som da ikke er med i noen gruppe, slettes også (de har ingenting å se). */
@@ -179,6 +241,62 @@ export function inheritedAccess(nodeId: string): { groupId: string; via: string 
 		for (const g of groupIdsWithAccess(p.id)) out.push({ groupId: g, via: p.name });
 	}
 	return out;
+}
+
+// --- Favoritter ---
+
+export function favoriteIds(userId: string, albumId: string): string[] {
+	return all<{ photo_id: string }>(
+		`SELECT f.photo_id FROM favorites f JOIN photos p ON p.id = f.photo_id WHERE f.user_id = ? AND p.album_id = ? ORDER BY p.sort_index, p.created_at`,
+		userId,
+		albumId
+	).map((r) => r.photo_id);
+}
+
+export function setFavorite(userId: string, photoId: string, on: boolean) {
+	if (on) run(`INSERT OR IGNORE INTO favorites (user_id, photo_id, created_at) VALUES (?, ?, ?)`, userId, photoId, now());
+	else run(`DELETE FROM favorites WHERE user_id = ? AND photo_id = ?`, userId, photoId);
+}
+
+export function markSubmitted(userId: string, albumId: string, count: number) {
+	run(
+		`INSERT INTO favorite_submissions (user_id, album_id, count, submitted_at) VALUES (?, ?, ?, ?)
+		 ON CONFLICT (user_id, album_id) DO UPDATE SET count = excluded.count, submitted_at = excluded.submitted_at`,
+		userId,
+		albumId,
+		count,
+		now()
+	);
+}
+
+export function submittedAt(userId: string, albumId: string): number | null {
+	return one<{ submitted_at: number }>(`SELECT submitted_at FROM favorite_submissions WHERE user_id = ? AND album_id = ?`, userId, albumId)?.submitted_at ?? null;
+}
+
+export interface FavoriteSummary {
+	user: { id: string; name: string; email: string };
+	submittedAt: number | null;
+	photos: { id: string; filename: string }[];
+}
+
+/** Alle gjesters favoritter i et album – til admin. */
+export function favoritesInAlbum(albumId: string): FavoriteSummary[] {
+	const rows = all<{ user_id: string; name: string; email: string; photo_id: string; filename: string }>(
+		`SELECT u.id AS user_id, u.name, u.email, p.id AS photo_id, p.filename
+		 FROM favorites f JOIN photos p ON p.id = f.photo_id JOIN users u ON u.id = f.user_id
+		 WHERE p.album_id = ? ORDER BY u.name COLLATE NOCASE, u.email, p.sort_index, p.created_at`,
+		albumId
+	);
+	const byUser = new Map<string, FavoriteSummary>();
+	for (const r of rows) {
+		let s = byUser.get(r.user_id);
+		if (!s) {
+			s = { user: { id: r.user_id, name: r.name, email: r.email }, submittedAt: submittedAt(r.user_id, albumId), photos: [] };
+			byUser.set(r.user_id, s);
+		}
+		s.photos.push({ id: r.photo_id, filename: r.filename });
+	}
+	return [...byUser.values()];
 }
 
 // --- Innloggingslenker ---

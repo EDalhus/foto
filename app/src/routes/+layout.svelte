@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
+	import Icon from '$lib/components/Icon.svelte';
 
 	let { data, children } = $props();
 	const inAdmin = $derived(page.url.pathname.startsWith('/admin'));
@@ -11,6 +12,11 @@
 		<div class="wrap row">
 			<a class="brand" href="/">{data.site.title}</a>
 			<nav>
+				{#if !inAdmin}
+					<a class="search" href="/sok" aria-label="Søk" aria-current={page.url.pathname === '/sok' ? 'page' : undefined}>
+						<Icon name="search" size={17} /> <span>Søk</span>
+					</a>
+				{/if}
 				{#if data.user?.isAdmin}
 					{#if inAdmin}
 						<a href="/">Til nettstedet</a>
@@ -81,6 +87,16 @@
 	}
 	nav form {
 		margin: 0;
+	}
+	.search {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	@media (max-width: 520px) {
+		.search span {
+			display: none;
+		}
 	}
 	.who {
 		max-width: 40vw;

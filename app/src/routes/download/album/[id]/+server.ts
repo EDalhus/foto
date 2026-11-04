@@ -7,7 +7,7 @@ import yazl from 'yazl';
 import { contentDisposition } from '$lib/server/http';
 import { downloadName, listPhotos, pendingFile, type Photo } from '$lib/server/photos';
 import { originalStore } from '$lib/server/storage';
-import { canView, getNode, isAdmin } from '$lib/server/tree';
+import { canDownload, canView, getNode } from '$lib/server/tree';
 import type { RequestHandler } from './$types';
 
 /** En strøm som ikke åpner kilden før zip-fila faktisk kommer til denne fila. */
@@ -56,7 +56,7 @@ async function openOriginal(photo: Photo): Promise<Readable> {
 export const GET: RequestHandler = async ({ params, locals }) => {
 	const album = getNode(params.id);
 	if (!album || album.type !== 'album' || !canView(album, locals.user)) error(404);
-	if (!album.allow_download && !isAdmin(locals.user)) error(403, 'Nedlasting er ikke tillatt for dette albumet.');
+	if (!canDownload(album, locals.user)) error(403, 'Nedlasting er ikke tillatt for dette albumet.');
 	const photos = listPhotos(album.id);
 	if (!photos.length) error(404, 'Albumet er tomt.');
 

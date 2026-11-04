@@ -9,6 +9,12 @@ Kjører i dag på **https://foto.dalhus.net**.
 - **Mapper og album i flere nivåer.** Strukturen er virtuell – den finnes bare i databasen, aldri som mapper på disk.
 - **Offentlige og private album.** Private album (eller album i en privat mappe) krever innlogging. En lenke alene gir ingenting – heller ikke direkte lenker til bildefilene.
 - **Gjester: familie, venner og kunder.** Lag grupper under **Administrer → Gjester**, legg til personer og del mapper eller album med gruppa (eller del fra albumsiden). Gjester logger inn med en lenke på e-post – ingen passord – og ser det som er delt med dem under «Delt med deg». Deles en mappe, følger alt under med.
+- **Kunden velger bilder.** Gjester trykker på hjertet på bildene de liker og sender valget. Du får e-post med filnavnene (klare til å lime inn i Lightroom-filteret), og valget står på albumsiden i admin.
+- **Utløpsdato og nedlasting per gruppe.** En gruppe kan ha «tilgang til og med» en dato, og kan få lov til å laste ned (eller ikke) uavhengig av albumet – f.eks. nedlasting først når kunden har betalt. Nye kundegrupper kan ikke laste ned før du sier ja.
+- **Varsler til deg** når en gjest logger inn første gang og når noen sender valget sitt (til `NOTIFY_EMAIL`, ellers admin-adressen; `NOTIFY_EMAIL=off` slår av).
+- **Søk** i titler, bildetekster, stikkord og filnavn, og i navn på album og mapper. Bare det brukeren har tilgang til, vises.
+- **Lysbildefremvisning** i bildevisningen (mellomrom eller ▶), i fullskjerm der nettleseren støtter det.
+- **Vannmerke** (valgfritt, under **Administrer → Innstillinger**) på offentlige bilder. Du og gjester i private album ser bildene uten. Vannmerkede versjoner lages første gang de trengs.
 - **Lightroom Classic-plugin** (publiseringstjeneste). Samlingssett blir mapper, samlinger blir album. Nye versjoner, sletting, navnebytter, flytting og rekkefølge følger med.
 - **Opplasting fra nettleseren** (dra og slipp) i admin.
 - **Nedlasting i full oppløsning** – enkeltbilder og hele album som zip – når det er slått på for albumet.
@@ -76,6 +82,7 @@ Sett `SMTP_HOST`, `SMTP_PORT` og `MAIL_FROM` (eventuelt `SMTP_USER`/`SMTP_PASS`,
 
 ```sh
 cd app && npm run build && node test/gjester.test.mjs   # gjester, lenker og tilgang
+node test/forbedringer.test.mjs                         # favoritter, utløp, nedlasting per gruppe, varsler, søk, vannmerke
 cd lightroom/test && bash kjor.sh                          # Lightroom-pluginen
 ```
 

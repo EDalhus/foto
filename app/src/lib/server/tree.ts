@@ -61,6 +61,7 @@ export const RESERVED = new Set([
 	'login',
 	'logout',
 	'koble',
+	'sok',
 	'health',
 	'_app',
 	'favicon.svg',
@@ -154,30 +155,81 @@ export function isAdmin(user: SessionUser | null | undefined) {
 	return user?.role === 'admin';
 }
 
-// Gjester: hvilke mapper/album brukeren har fått tilgang til via gruppene sine. Bufres til neste invalidate().
-let grantCache: { version: number; byUser: Map<string, Set<string>> } = { version: -1, byUser: new Map() };
+export type GroupDownload = 'album' | 'yes' | 'no';
+interface Grant {
+	groupId: string;
+	download: GroupDownload;
+}
+
+// Gjester: hvilke mapper/album brukeren har fått tilgang til via gruppene sine (utløpte grupper teller ikke).
+// Bufres til neste invalidate(), eller til den første gruppa utløper.
+let grantCache: { version: number; byUser: Map<string, { grants: Map<string, Grant[]>; until: number }> } = {
+	version: -1,
+	byUser: new Map()
+};
+
+function userGrants(userId: string): Map<string, Grant[]> {
+	if (grantCache.version !== version) grantCache = { version, byUser: new Map() };
+	const t = now();
+	let entry = grantCache.byUser.get(userId);
+	if (!entry || entry.until <= t) {
+		const rows = all<{ node_id: string; group_id: string; download: GroupDownload; expires_at: number | null }>(
+			`SELECT a.node_id, g.id AS group_id, g.download, g.expires_at
+			 FROM node_access a JOIN group_members m ON m.group_id = a.group_id JOIN groups g ON g.id = a.group_id
+			 WHERE m.user_id = ? AND (g.expires_at IS NULL OR g.expires_at > ?)`,
+			userId,
+			t
+		);
+		const grants = new Map<string, Grant[]>();
+		let until = Infinity;
+		for (const r of rows) {
+			if (r.expires_at) until = Math.min(until, r.expires_at);
+			const list = grants.get(r.node_id) ?? [];
+			list.push({ groupId: r.group_id, download: r.download });
+			grants.set(r.node_id, list);
+		}
+		entry = { grants, until };
+		grantCache.byUser.set(userId, entry);
+	}
+	return entry.grants;
+}
 
 export function grantedNodeIds(userId: string): Set<string> {
-	if (grantCache.version !== version) grantCache = { version, byUser: new Map() };
-	let set = grantCache.byUser.get(userId);
-	if (!set) {
-		set = new Set(
-			all<{ node_id: string }>(
-				`SELECT DISTINCT a.node_id FROM node_access a JOIN group_members m ON m.group_id = a.group_id WHERE m.user_id = ?`,
-				userId
-			).map((r) => r.node_id)
-		);
-		grantCache.byUser.set(userId, set);
-	}
-	return set;
+	return new Set(userGrants(userId).keys());
+}
+
+/** Gruppene som gir brukeren tilgang til noden (direkte eller via en mappe over). */
+function grantsFor(node: TreeNode, user: SessionUser | null | undefined): Grant[] {
+	if (!user || isAdmin(user)) return [];
+	const granted = userGrants(user.id);
+	if (!granted.size) return [];
+	const out: Grant[] = [];
+	for (let n: TreeNode | null = node; n; n = n.parent) out.push(...(granted.get(n.id) ?? []));
+	return out;
 }
 
 /** Delt med brukeren: noden selv eller en mappe over den er delt med en av gruppene brukeren er med i. */
 export function isShared(node: TreeNode, user: SessionUser | null | undefined) {
-	if (!user || isAdmin(user)) return false;
-	const granted = grantedNodeIds(user.id);
-	if (!granted.size) return false;
-	for (let n: TreeNode | null = node; n; n = n.parent) if (granted.has(n.id)) return true;
+	return grantsFor(node, user).length > 0;
+}
+
+/** Favoritter er for gjester i album som er delt med dem (kunden velger bilder). */
+export function canFavorite(album: TreeNode, user: SessionUser | null | undefined) {
+	return !!user && !isAdmin(user) && album.type === 'album' && isShared(album, user);
+}
+
+/**
+ * Kan brukeren laste ned originalene i albumet?
+ * Gruppa kan overstyre albumets innstilling: «yes» (alltid), «no» (aldri) eller «album» (følg albumet).
+ * Har brukeren tilgang via flere grupper, vinner den mest rause.
+ */
+export function canDownload(album: TreeNode, user: SessionUser | null | undefined) {
+	if (isAdmin(user)) return true;
+	if (!album.effectivePrivate && album.allow_download) return true;
+	const grants = grantsFor(album, user);
+	if (!grants.length) return !!album.allow_download && canView(album, user);
+	if (grants.some((g) => g.download === 'yes')) return true;
+	if (grants.some((g) => g.download === 'album')) return !!album.allow_download;
 	return false;
 }
 

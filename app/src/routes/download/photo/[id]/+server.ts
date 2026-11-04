@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { contentDisposition } from '$lib/server/http';
 import { downloadName, getPhoto, pendingFile } from '$lib/server/photos';
 import { originalStore, StoreUnavailableError } from '$lib/server/storage';
-import { canView, isAdmin } from '$lib/server/tree';
+import { canDownload, canView } from '$lib/server/tree';
 import { albumOf } from '$lib/server/views';
 import type { RequestHandler } from './$types';
 
@@ -20,7 +20,7 @@ export const GET: RequestHandler = async ({ params, locals, request }) => {
 	const photo = getPhoto(params.id);
 	const album = photo ? albumOf(photo) : null;
 	if (!photo || !album || !canView(album, locals.user)) error(404);
-	if (!album.allow_download && !isAdmin(locals.user)) error(403, 'Nedlasting er ikke tillatt for dette albumet.');
+	if (!canDownload(album, locals.user)) error(403, 'Nedlasting er ikke tillatt for dette albumet.');
 
 	const name = downloadName(photo);
 	const headers: Record<string, string> = {

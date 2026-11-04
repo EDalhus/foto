@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import Icon from '$lib/components/Icon.svelte';
-	import { formatLocal } from '$lib/format';
+	import { formatDate, formatLocal } from '$lib/format';
 
 	let { data, form } = $props();
 	let copied = $state(false);
@@ -24,6 +24,9 @@
 	let linkInput = $state<HTMLInputElement>();
 
 	const KIND = { family: 'Familie og venner', client: 'Kunde' } as const;
+	const DOWNLOAD = { album: 'Som albumet er satt opp', yes: 'Ja, alltid', no: 'Nei, bare se' } as const;
+	// Datoen i feltet (ÅÅÅÅ-MM-DD) som «12. desember 2026».
+	const dateText = (d: string) => (d ? formatDate(Date.parse(`${d}T12:00:00Z`)) : '');
 	const keep = () => async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => update({ reset: false });
 </script>
 
@@ -69,6 +72,11 @@
 					<summary>
 						<span class="gname">{g.name}</span>
 						<span class="badge">{KIND[g.kind]}</span>
+						{#if g.expired}
+							<span class="badge expired"><Icon name="clock" size={12} /> Utløpt</span>
+						{:else if g.expiresDate}
+							<span class="badge"><Icon name="clock" size={12} /> Til og med {dateText(g.expiresDate)}</span>
+						{/if}
 						<span class="faint count">{g.members.length} {g.members.length === 1 ? 'person' : 'personer'} · {g.access.length} delt</span>
 					</summary>
 
@@ -180,8 +188,24 @@
 										<option value="client">Kunde</option>
 									</select>
 								</label>
+								<label class="field">
+									<span>Kan laste ned originaler</span>
+									<select id="gdl-{g.id}" class="input" name="download" value={g.download}>
+										{#each Object.entries(DOWNLOAD) as [value, label] (value)}
+											<option {value}>{label}</option>
+										{/each}
+									</select>
+								</label>
+								<label class="field">
+									<span>Tilgang til og med</span>
+									<input id="gexp-{g.id}" class="input" type="date" name="expires" value={g.expiresDate} />
+								</label>
 								<button class="btn" type="submit">Lagre</button>
 							</form>
+							<p class="faint hint">
+								La datoen stå tom for tilgang uten slutt. Etter datoen ser gruppa ikke lenger det som er delt, men alt blir liggende,
+								så du kan forlenge senere.
+							</p>
 							{#if confirmDelete === g.id}
 								<form method="POST" action="?/deleteGroup" use:enhance class="buttons">
 									<input type="hidden" name="group" value={g.id} />
@@ -223,6 +247,8 @@
 				<li>Deler du en mappe, får de alt som ligger i den, også album du legger til senere.</li>
 				<li>Innloggingen varer i 30 dager. Etterpå ber de om en ny lenke på innloggingssiden.</li>
 				<li>Du kan også dele fra albumsiden under Bibliotek.</li>
+				<li>Kunder kan trykke på hjertet på bildene de liker og sende valget til deg. Du får en e-post, og valget står på albumsiden.</li>
+				<li>Nye kundegrupper kan ikke laste ned før du endrer det, for eksempel når de har betalt.</li>
 			</ul>
 		</div>
 	</aside>
@@ -395,6 +421,13 @@
 	.settings {
 		padding-top: 16px;
 		border-top: 1px solid var(--line);
+	}
+	.hint {
+		font-size: 13px;
+		max-width: 70ch;
+	}
+	.badge.expired {
+		color: var(--danger, #e5484d);
 	}
 	.settings > .btn {
 		justify-self: start;

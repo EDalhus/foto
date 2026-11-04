@@ -23,17 +23,23 @@
 		cloud: 'M7 18a4 4 0 0 1-.5-7.97 6 6 0 0 1 11.46 1.47A3.5 3.5 0 0 1 17.5 18z',
 		clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-13v4.5l3 2',
 		users: 'M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 6.5M18 14.5a6.5 6.5 0 0 1 3.5 5.5',
-		mail: 'M3 6h18v12H3zm0 0 9 7 9-7'
+		mail: 'M3 6h18v12H3zm0 0 9 7 9-7',
+		heart: 'M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.1a4.3 4.3 0 0 1 7.5 2.7C19.5 15.4 12 20 12 20z',
+		play: 'M8 5.5v13l10.5-6.5z',
+		pause: 'M8.5 5v14M15.5 5v14',
+		search: 'M10.5 17.5a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4.5-4.5',
+		sliders: 'M4 7h9m4 0h3M4 17h3m4 0h9M15 5v4M9 15v4',
+		send: 'M4 12 20 4l-6 16-3-7zm7 1 9-9'
 	};
 
-	let { name, size = 18, label }: { name: string; size?: number; label?: string } = $props();
+	let { name, size = 18, label, filled = false }: { name: string; size?: number; label?: string; filled?: boolean } = $props();
 </script>
 
 <svg
 	width={size}
 	height={size}
 	viewBox="0 0 24 24"
-	fill="none"
+	fill={filled ? 'currentColor' : 'none'}
 	stroke="currentColor"
 	stroke-width="1.8"
 	stroke-linecap="round"
