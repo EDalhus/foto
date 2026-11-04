@@ -14,10 +14,10 @@
 </svelte:head>
 
 <div class="wrap">
-	<section class="intro">
-		<h1>{data.site.title}</h1>
-		{#if data.site.tagline}<p class="muted">{data.site.tagline}</p>{/if}
-	</section>
+	<!-- Navnet står allerede øverst i menyen; overskriften er bare for skjermlesere og søkemotorer. -->
+	<h1 class="sr-only">{data.site.title}</h1>
+	{#if data.site.tagline}<p class="tagline muted">{data.site.tagline}</p>{/if}
+	<div class="top"></div>
 
 	{#if data.accessExpired}
 		<p class="notice warn">Tilgangen din til de delte bildene har utløpt. Ta kontakt med fotografen hvis du trenger den igjen.</p>
@@ -44,17 +44,12 @@
 </div>
 
 <style>
-	.intro {
-		padding: clamp(32px, 7vw, 96px) 0 clamp(28px, 4vw, 56px);
-		max-width: 900px;
+	.top {
+		height: clamp(8px, 1.5vw, 20px);
 	}
-	h1 {
-		font-size: clamp(34px, 5.4vw, 64px);
-		letter-spacing: -0.035em;
-	}
-	.intro p {
-		margin-top: 12px;
-		font-size: clamp(16px, 1.6vw, 19px);
+	.tagline {
+		margin: clamp(8px, 1.5vw, 20px) 0 0;
+		font-size: clamp(15px, 1.4vw, 17px);
 	}
 	.shared {
 		display: grid;
