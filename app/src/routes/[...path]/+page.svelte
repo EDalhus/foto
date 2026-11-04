@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { pushState, replaceState } from '$app/navigation';
+	import { goto, pushState, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import CardGrid from '$lib/components/CardGrid.svelte';
@@ -18,7 +18,42 @@
 	let favs = $derived(new Set<string>(data.favorites?.ids ?? []));
 	let onlyFavs = $state(false);
 	const favorites = $derived(data.favorites ? favs : null);
-	const shown = $derived(onlyFavs && favorites ? data.photos.filter((p) => favs.has(p.id)) : data.photos);
+
+	// --- Sortering (husket i adressen, så lenken kan deles) ---
+	type Sort = 'album' | 'eldste' | 'nyeste';
+	const SORTS: { id: Sort; label: string }[] = [
+		{ id: 'album', label: 'Albumets rekkefølge' },
+		{ id: 'eldste', label: 'Eldste først' },
+		{ id: 'nyeste', label: 'Nyeste først' }
+	];
+	const sort = $derived.by<Sort>(() => {
+		const v = page.url.searchParams.get('sortering');
+		return v === 'eldste' || v === 'nyeste' ? v : 'album';
+	});
+	const sorted = $derived.by(() => {
+		if (sort === 'album') return data.photos;
+		const dir = sort === 'eldste' ? 1 : -1;
+		// Bilder uten dato havner sist; ellers beholdes albumets rekkefølge ved likhet.
+		return data.photos
+			.map((p, i) => ({ p, i }))
+			.sort((a, b) => {
+				const x = a.p.takenAt;
+				const y = b.p.takenAt;
+				if (x == null || y == null) return x == null && y == null ? a.i - b.i : x == null ? 1 : -1;
+				return (x - y) * dir || a.i - b.i;
+			})
+			.map((x) => x.p);
+	});
+	let sortOpen = $state(false);
+	function setSort(id: Sort) {
+		sortOpen = false;
+		const url = new URL(page.url);
+		if (id === 'album') url.searchParams.delete('sortering');
+		else url.searchParams.set('sortering', id);
+		goto(url.pathname + url.search, { replaceState: true, noScroll: true, keepFocus: true });
+	}
+
+	const shown = $derived(onlyFavs && favorites ? sorted.filter((p) => favs.has(p.id)) : sorted);
 	let favError = $state('');
 
 	async function toggleFavorite(id: string) {
@@ -82,6 +117,8 @@
 	}
 </script>
 
+<svelte:window onkeydown={(e) => e.key === 'Escape' && sortOpen && (sortOpen = false)} />
+
 <svelte:head>
 	<title>{node.name} – {data.site.title}</title>
 	<meta property="og:title" content={node.name} />
@@ -113,6 +150,32 @@
 			<button class="btn" onclick={share}><Icon name={copied ? 'check' : 'link'} /> {copied ? 'Lenke kopiert' : 'Del'}</button>
 			{#if data.isAdmin}
 				<a class="btn ghost" href="/admin/node/{node.id}">Rediger</a>
+			{/if}
+			{#if node.type === 'album' && data.photos.length > 1}
+				<div class="sort">
+					<button
+						class="sort-btn"
+						type="button"
+						aria-haspopup="menu"
+						aria-expanded={sortOpen}
+						onclick={() => (sortOpen = !sortOpen)}
+					>
+						<Icon name="order" size={18} />
+						{SORTS.find((s) => s.id === sort)?.label}
+					</button>
+					{#if sortOpen}
+						<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+						<div class="sort-scrim" onclick={() => (sortOpen = false)}></div>
+						<div class="sort-menu" role="menu">
+							{#each SORTS as s (s.id)}
+								<button type="button" role="menuitemradio" aria-checked={s.id === sort} onclick={() => setSort(s.id)}>
+									<span class="tick">{#if s.id === sort}<Icon name="check" size={15} />{/if}</span>
+									{s.label}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
 			{/if}
 		</div>
 
@@ -176,7 +239,6 @@
 		padding: clamp(24px, 4vw, 56px) 0 clamp(24px, 3vw, 40px);
 		display: grid;
 		gap: 12px;
-		max-width: 980px;
 	}
 	h1 {
 		font-size: clamp(30px, 4.4vw, 52px);
@@ -204,7 +266,70 @@
 		gap: 8px;
 		margin-top: 6px;
 	}
+	.sort {
+		position: relative;
+		margin-left: auto;
+		align-self: center;
+	}
+	.sort-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		height: 40px;
+		padding: 0 4px;
+		border: 0;
+		background: none;
+		color: var(--muted);
+		font: inherit;
+		font-size: 15px;
+		cursor: pointer;
+	}
+	.sort-btn:hover,
+	.sort-btn[aria-expanded='true'] {
+		color: var(--text);
+	}
+	.sort-scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 40;
+	}
+	.sort-menu {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 4px);
+		z-index: 41;
+		min-width: 210px;
+		padding: 6px;
+		display: grid;
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		box-shadow: 0 16px 48px rgb(0 0 0 / 0.5);
+	}
+	.sort-menu button {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 9px 10px;
+		border: 0;
+		border-radius: 8px;
+		background: none;
+		color: var(--text);
+		font: inherit;
+		font-size: 14px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.sort-menu button:hover {
+		background: var(--surface-2);
+	}
+	.tick {
+		width: 15px;
+		display: inline-grid;
+		color: var(--muted);
+	}
 	.picks {
+		max-width: 980px;
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
