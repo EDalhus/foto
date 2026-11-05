@@ -50,5 +50,7 @@
 		navigated = { from: data.photoId, id };
 		replaceState(`/i/${id}`, {});
 	}}
-	onclose={() => goto(data.album.path)}
+	handoff
+	onclose={(info) =>
+		goto(data.album.path, { noScroll: true, state: { landing: { ...info, at: Date.now() } } })}
 />

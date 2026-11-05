@@ -26,7 +26,7 @@
 	{#each photos as p, i (p.id)}
 		{@const ar = p.w / p.h}
 		{@const fav = !!favorites?.has(p.id)}
-		<div class="item" style:flex-grow={ar} style:flex-basis="calc({ar} * var(--row))" style:background-color={p.color}>
+		<div class="item" data-photo={p.id} style:flex-grow={ar} style:flex-basis="calc({ar} * var(--row))" style:background-color={p.color}>
 			<i style:padding-bottom="{(100 / ar).toFixed(4)}%"></i>
 			<a href="/i/{p.id}" class="hit" onclick={(e) => onopen(p.id, e)} aria-label={p.title || `Bilde ${i + 1}`}>
 				<img

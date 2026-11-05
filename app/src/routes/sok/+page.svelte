@@ -1,21 +1,10 @@
 <script lang="ts">
-	import { pushState, replaceState } from '$app/navigation';
-	import { page } from '$app/state';
 	import CardGrid from '$lib/components/CardGrid.svelte';
+	import Gallery from '$lib/components/Gallery.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import JustifiedGrid from '$lib/components/JustifiedGrid.svelte';
-	import Viewer from '$lib/components/Viewer.svelte';
 	import { plural } from '$lib/format';
 
 	let { data } = $props();
-
-	const openIndex = $derived(page.state.photoId ? data.photos.findIndex((p) => p.id === page.state.photoId) : -1);
-
-	function open(id: string, e: MouseEvent) {
-		if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-		e.preventDefault();
-		pushState(`/i/${id}`, { photoId: id });
-	}
 </script>
 
 <svelte:head>
@@ -62,20 +51,12 @@
 	{#if data.photos.length}
 		<section class="block">
 			{#if data.cards.length}<h2>Bilder</h2>{/if}
-			<JustifiedGrid photos={data.photos} onopen={open} />
+			<Gallery photos={data.photos} />
 			{#if data.more}<p class="muted more">Viser de {data.photos.length} nyeste. Legg til flere ord for å snevre inn søket.</p>{/if}
 		</section>
 	{/if}
 </div>
 
-{#if openIndex >= 0}
-	<Viewer
-		photos={data.photos}
-		index={openIndex}
-		onnavigate={(id) => replaceState(`/i/${id}`, { photoId: id })}
-		onclose={() => history.back()}
-	/>
-{/if}
 
 <style>
 	.head {

@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { goto, pushState, replaceState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import CardGrid from '$lib/components/CardGrid.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import JustifiedGrid from '$lib/components/JustifiedGrid.svelte';
-	import Viewer from '$lib/components/Viewer.svelte';
+	import Gallery from '$lib/components/Gallery.svelte';
 	import { formatDate, formatLocal, plural } from '$lib/format';
 
 	let { data, form } = $props();
@@ -82,7 +81,6 @@
 		if (onlyFavs && favs.size === 0) onlyFavs = false;
 	});
 
-	const openIndex = $derived(page.state.photoId ? shown.findIndex((p) => p.id === page.state.photoId) : -1);
 	const ogImage = $derived(
 		node.type === 'album' ? data.photos[0]?.og : data.cards.find((c) => c.cover)?.cover?.src.replace(/[smlx]\.webp$/, 'og.jpg')
 	);
@@ -93,12 +91,6 @@
 		const b = formatDate(r.to);
 		return a === b ? a : `${a} – ${b}`;
 	});
-
-	function open(id: string, e: MouseEvent) {
-		if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-		e.preventDefault();
-		pushState(`/i/${id}`, { photoId: id });
-	}
 
 	let copied = $state(false);
 	async function share() {
@@ -216,23 +208,12 @@
 			<p class="muted">Mappa er tom.</p>
 		{/if}
 	{:else if data.photos.length}
-		<JustifiedGrid photos={shown} onopen={open} {favorites} ontogglefavorite={toggleFavorite} />
+		<Gallery photos={shown} albumName={node.name} {favorites} ontogglefavorite={toggleFavorite} />
 	{:else}
 		<p class="muted">Albumet er tomt.</p>
 	{/if}
 </div>
 
-{#if openIndex >= 0}
-	<Viewer
-		photos={shown}
-		index={openIndex}
-		albumName={node.name}
-		{favorites}
-		ontogglefavorite={toggleFavorite}
-		onnavigate={(id) => replaceState(`/i/${id}`, { photoId: id })}
-		onclose={() => history.back()}
-	/>
-{/if}
 
 <style>
 	.head {
