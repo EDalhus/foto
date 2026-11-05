@@ -52,7 +52,9 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 		photos,
 		range: taken.length ? { from: Math.min(...taken), to: Math.max(...taken) } : null,
 		downloadAll: canDownload(node, locals.user) && photos.length ? `/download/album/${node.id}` : null,
-		favorites: fav
+		favorites: fav,
+		// Administratoren kan velge forsidebilde rett fra bildevisningen.
+		coverId: isAdmin(locals.user) ? (node.cover_photo_id ?? node.firstPhotoId) : null
 	};
 };
 

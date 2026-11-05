@@ -3,20 +3,18 @@ import {
 	accessOf,
 	addMember,
 	createGroup,
-	createLoginToken,
 	deleteGroup,
 	expiryDate,
 	getGroup,
-	getGuest,
 	grantAccess,
-	INVITE_LINK_DAYS,
 	listGroups,
 	membersOf,
 	removeMember,
 	revokeAccess,
 	updateGroup
 } from '$lib/server/guests';
-import { loginMail, mailConfigured, sendMail } from '$lib/server/mail';
+import { inviteLink, sendInvite } from '$lib/server/invite';
+import { mailConfigured } from '$lib/server/mail';
 import { getTree, HttpError, type TreeNode } from '$lib/server/tree';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -53,21 +51,6 @@ async function guard<T>(fn: () => Promise<T> | T) {
 		if (err instanceof HttpError) return fail(err.status, { error: err.message });
 		throw err;
 	}
-}
-
-async function sendInvite(userId: string, origin: string) {
-	const guest = getGuest(userId);
-	if (!guest) throw new HttpError(404, 'Personen finnes ikke.');
-	const { token } = createLoginToken(guest.id, 'invite');
-	try {
-		await sendMail(
-			loginMail({ to: guest.email, name: guest.name, url: `${origin}/login/lenke/${token}`, invite: true, validFor: `${INVITE_LINK_DAYS} dager` })
-		);
-	} catch (err) {
-		console.error('[foto] Kunne ikke sende invitasjon:', err);
-		throw new HttpError(503, `Klarte ikke å sende e-post til ${guest.email}. Bruk «Kopier lenke» i stedet.`);
-	}
-	return guest;
 }
 
 export const actions: Actions = {
@@ -128,10 +111,8 @@ export const actions: Actions = {
 	copyLink: ({ request, url }) =>
 		guard(async () => {
 			const form = await request.formData();
-			const guest = getGuest(String(form.get('user') ?? ''));
-			if (!guest) throw new HttpError(404, 'Personen finnes ikke.');
-			const { token } = createLoginToken(guest.id, 'invite');
-			return { link: { email: guest.email, url: `${url.origin}/login/lenke/${token}` } };
+			const { guest, url: link } = inviteLink(String(form.get('user') ?? ''), url.origin);
+			return { link: { email: guest.email, url: link } };
 		}),
 
 	grant: ({ request }) =>

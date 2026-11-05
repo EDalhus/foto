@@ -15,12 +15,17 @@
 		photos,
 		albumName = '',
 		favorites = null,
-		ontogglefavorite
+		ontogglefavorite,
+		coverId = null,
+		onsetcover
 	}: {
 		photos: PhotoView[];
 		albumName?: string;
 		favorites?: Set<string> | null;
 		ontogglefavorite?: (id: string) => void;
+		/** Administrator: albumets forsidebilde, og hvordan det byttes fra visningen. */
+		coverId?: string | null;
+		onsetcover?: (id: string) => void;
 	} = $props();
 
 	let root = $state<HTMLElement>();
@@ -125,7 +130,18 @@
 </div>
 
 {#if openIndex >= 0}
-	<Viewer {photos} index={openIndex} {albumName} {favorites} {ontogglefavorite} {thumb} onnavigate={navigate} onclose={close} />
+	<Viewer
+		{photos}
+		index={openIndex}
+		{albumName}
+		{favorites}
+		{ontogglefavorite}
+		{thumb}
+		{coverId}
+		{onsetcover}
+		onnavigate={navigate}
+		onclose={close}
+	/>
 {/if}
 
 {#if landing}

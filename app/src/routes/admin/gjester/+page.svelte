@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import Icon from '$lib/components/Icon.svelte';
+	import { onMount } from 'svelte';
 	import { formatDate, formatLocal } from '$lib/format';
+	import { submit } from '$lib/submit';
 
 	let { data, form } = $props();
 	let copied = $state(false);
@@ -10,6 +12,14 @@
 
 	$effect(() => {
 		if (form && 'openGroup' in form && form.openGroup) open[form.openGroup] = true;
+	});
+	// Lenker som /admin/gjester#gruppe-<id> åpner gruppa.
+	onMount(() => {
+		const m = /^#gruppe-(.+)$/.exec(location.hash);
+		if (m) {
+			open[m[1]] = true;
+			requestAnimationFrame(() => document.getElementById(`gruppe-${m[1]}`)?.scrollIntoView({ block: 'start' }));
+		}
 	});
 
 	async function copy(text: string, input: HTMLInputElement | undefined) {
@@ -27,7 +37,6 @@
 	const DOWNLOAD = { album: 'Som albumet er satt opp', yes: 'Ja, alltid', no: 'Nei, bare se' } as const;
 	// Datoen i feltet (ÅÅÅÅ-MM-DD) som «12. desember 2026».
 	const dateText = (d: string) => (d ? formatDate(Date.parse(`${d}T12:00:00Z`)) : '');
-	const keep = () => async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => update({ reset: false });
 </script>
 
 <svelte:head><title>Gjester – Administrer</title></svelte:head>
@@ -43,8 +52,6 @@
 		{#if !data.mailReady}
 			<p class="notice warn">E-post er ikke satt opp på serveren ennå. Bruk «Kopier lenke» og send lenken selv.</p>
 		{/if}
-		{#if form && 'error' in form && form.error}<p class="notice error" role="alert">{form.error}</p>{/if}
-		{#if form && 'message' in form && form.message}<p class="notice success" role="status">{form.message}</p>{/if}
 		{#if form && 'link' in form && form.link}
 			<div class="notice success link">
 				<strong>Lenke for {form.link.email}</strong>
@@ -68,7 +75,12 @@
 
 		<div class="groups">
 			{#each data.groups as g (g.id)}
-				<details class="group" open={open[g.id] ?? data.groups.length === 1} ontoggle={(e) => (open[g.id] = e.currentTarget.open)}>
+				<details
+					class="group"
+					id="gruppe-{g.id}"
+					open={open[g.id] ?? data.groups.length === 1}
+					ontoggle={(e) => (open[g.id] = e.currentTarget.open)}
+				>
 					<summary>
 						<span class="gname">{g.name}</span>
 						<span class="badge">{KIND[g.kind]}</span>
@@ -93,16 +105,16 @@
 											</div>
 											<div class="acts">
 												{#if data.mailReady}
-													<form method="POST" action="?/invite" use:enhance>
+													<form method="POST" action="?/invite" use:enhance={submit()}>
 														<input type="hidden" name="user" value={m.id} />
 														<button class="btn ghost" type="submit" title="Send ny lenke på e-post"><Icon name="mail" size={16} /> Send lenke</button>
 													</form>
 												{/if}
-												<form method="POST" action="?/copyLink" use:enhance>
+												<form method="POST" action="?/copyLink" use:enhance={submit()}>
 													<input type="hidden" name="user" value={m.id} />
 													<button class="btn ghost" type="submit"><Icon name="link" size={16} /> Kopier lenke</button>
 												</form>
-												<form method="POST" action="?/removeMember" use:enhance>
+												<form method="POST" action="?/removeMember" use:enhance={submit()}>
 													<input type="hidden" name="group" value={g.id} />
 													<input type="hidden" name="user" value={m.id} />
 													<button class="btn ghost" type="submit" title="Fjern fra gruppa"><Icon name="x" size={16} /> Fjern</button>
@@ -114,7 +126,7 @@
 							{:else}
 								<p class="faint">Ingen ennå.</p>
 							{/if}
-							<form method="POST" action="?/addMember" use:enhance class="add">
+							<form method="POST" action="?/addMember" use:enhance={submit({ reset: true })} class="add">
 								<input type="hidden" name="group" value={g.id} />
 								<label class="field">
 									<span>Navn</span>
@@ -145,7 +157,7 @@
 												<span class="faint">{a.path}{a.type === 'folder' ? ' · med alt innhold' : ''}</span>
 											</div>
 											<div class="acts">
-												<form method="POST" action="?/revoke" use:enhance>
+												<form method="POST" action="?/revoke" use:enhance={submit()}>
 													<input type="hidden" name="group" value={g.id} />
 													<input type="hidden" name="node" value={a.id} />
 													<button class="btn ghost" type="submit"><Icon name="x" size={16} /> Fjern</button>
@@ -157,7 +169,7 @@
 							{:else}
 								<p class="faint">Ingenting delt ennå.</p>
 							{/if}
-							<form method="POST" action="?/grant" use:enhance class="add">
+							<form method="POST" action="?/grant" use:enhance={submit()} class="add">
 								<input type="hidden" name="group" value={g.id} />
 								<label class="field grow">
 									<span>Mappe eller album</span>
@@ -175,7 +187,7 @@
 						</div>
 
 						<div class="block settings">
-							<form method="POST" action="?/updateGroup" use:enhance={keep} class="add">
+							<form method="POST" action="?/updateGroup" use:enhance={submit()} class="add">
 								<input type="hidden" name="group" value={g.id} />
 								<label class="field grow">
 									<span>Gruppenavn</span>
@@ -207,7 +219,7 @@
 								så du kan forlenge senere.
 							</p>
 							{#if confirmDelete === g.id}
-								<form method="POST" action="?/deleteGroup" use:enhance class="buttons">
+								<form method="POST" action="?/deleteGroup" use:enhance={submit()} class="buttons">
 									<input type="hidden" name="group" value={g.id} />
 									<span class="faint">Personer som bare er med i denne gruppa, mister tilgangen.</span>
 									<button class="btn danger solid" type="submit">Ja, slett gruppa</button>
@@ -224,7 +236,7 @@
 	</section>
 
 	<aside class="side">
-		<form method="POST" action="?/createGroup" use:enhance class="panel">
+		<form method="POST" action="?/createGroup" use:enhance={submit({ reset: true })} class="panel">
 			<h2>Ny gruppe</h2>
 			<label class="field">
 				<span>Navn</span>
@@ -246,7 +258,10 @@
 				<li>Gjester ser alt som er offentlig, og i tillegg det som er delt med gruppene deres. Det står under «Delt med deg» på forsiden.</li>
 				<li>Deler du en mappe, får de alt som ligger i den, også album du legger til senere.</li>
 				<li>Innloggingen varer i 30 dager. Etterpå ber de om en ny lenke på innloggingssiden.</li>
-				<li>Du kan også dele fra albumsiden under Bibliotek.</li>
+				<li>
+					Raskest er ofte albumsiden under Bibliotek: velg <strong>Privat</strong> og klikk på en gruppe, eller <strong>Kunde</strong> og skriv inn
+					navn og e-post – da lages kunden og invitasjonen sendes med en gang.
+				</li>
 				<li>Kunder kan trykke på hjertet på bildene de liker og sende valget til deg. Du får en e-post, og valget står på albumsiden.</li>
 				<li>Nye kundegrupper kan ikke laste ned før du endrer det, for eksempel når de har betalt.</li>
 			</ul>

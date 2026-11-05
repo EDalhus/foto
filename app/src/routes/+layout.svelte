@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import Icon from '$lib/components/Icon.svelte';
 	import SearchPalette from '$lib/components/SearchPalette.svelte';
+	import Toasts from '$lib/components/Toasts.svelte';
 	import { onMount } from 'svelte';
 
 	let { data, children } = $props();
@@ -58,6 +59,7 @@
 	</main>
 
 	{#if !inAdmin}<SearchPalette bind:this={palette} />{/if}
+	<Toasts />
 
 	<footer class="foot">
 		<div class="wrap row">

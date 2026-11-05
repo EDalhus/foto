@@ -54,3 +54,19 @@ export interface SearchHit {
 	isPrivate: boolean;
 	thumb: { src: string; srcset: string; color: string | null } | null;
 }
+
+/** Hvem som ser en mappe eller et album (admin). */
+export type AccessMode = 'public' | 'private' | 'client';
+
+export interface GroupAccessView {
+	id: string;
+	name: string;
+	kind: 'family' | 'client';
+	download: 'album' | 'yes' | 'no';
+	expiresDate: string;
+	expired: boolean;
+	shared: boolean;
+	direct: boolean;
+	via: string | null;
+	members: { id: string; name: string; email: string; lastLogin: number | null }[];
+}

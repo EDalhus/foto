@@ -52,6 +52,15 @@ function coverPhotoId(node: TreeNode, user: SessionUser | null, depth = 0): stri
 	return null;
 }
 
+/** Forsidebildet slik brukeren ser det: valgt av deg, ellers automatisk. */
+export function coverView(node: TreeNode, user: SessionUser | null): (ImageView & { photoId: string }) | null {
+	const id = coverPhotoId(node, user);
+	const p = id ? getPhotosByIds([id])[0] : undefined;
+	const album = p ? getTree().byId.get(p.album_id) : undefined;
+	if (!p || !album || !canView(album, user)) return null;
+	return { ...imageView(p, watermarkFor(album, user)), photoId: p.id };
+}
+
 export function cardViews(nodes: TreeNode[], user: SessionUser | null): CardView[] {
 	const coverIds = new Map(nodes.map((n) => [n.id, coverPhotoId(n, user)]));
 	const photos = new Map(

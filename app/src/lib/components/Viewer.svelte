@@ -27,7 +27,9 @@
 		favorites = null,
 		ontogglefavorite,
 		thumb,
-		handoff = false
+		handoff = false,
+		coverId = null,
+		onsetcover
 	}: {
 		photos: PhotoView[];
 		index: number;
@@ -41,6 +43,9 @@
 		thumb?: (id: string) => HTMLElement | null;
 		/** Ikke animer lukkingen her; siden det lukkes til, gjør det (brukes på egne bildelenker). */
 		handoff?: boolean;
+		/** Administrator: nåværende forsidebilde og hvordan det byttes (viser en stjerne). */
+		coverId?: string | null;
+		onsetcover?: (id: string) => void;
 	} = $props();
 
 	const SLIDE_MS = 5000;
@@ -346,6 +351,19 @@
 						<Icon name="heart" size={21} filled={isFav} />
 					</button>
 				{/if}
+				{#if onsetcover}
+					{@const isCover = coverId === photo.id}
+					<button
+						class="icon cover"
+						class:on={isCover}
+						onclick={() => !isCover && onsetcover(photo.id)}
+						aria-label={isCover ? 'Dette er forsidebildet' : 'Bruk som forsidebilde'}
+						aria-pressed={isCover}
+						title={isCover ? 'Forsidebildet' : 'Bruk som forsidebilde'}
+					>
+						<Icon name="star" size={20} filled={isCover} />
+					</button>
+				{/if}
 				{#if photos.length > 1}
 					<button
 						class="icon"
@@ -533,6 +551,11 @@
 	}
 	.icon.fav:hover {
 		background: rgba(255, 255, 255, 0.1);
+	}
+	.icon.cover.on {
+		color: var(--warn);
+		background: transparent;
+		cursor: default;
 	}
 	/* Under fremvisning: skjul alt annet enn bildet til musa beveges eller man trykker på skjermen. */
 	.playing .bar,

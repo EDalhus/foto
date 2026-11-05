@@ -440,6 +440,18 @@ export function updateNode(id: string, patch: UpdateNodeInput): void {
 			if (cover && row.type === 'album' && !one(`SELECT 1 FROM photos WHERE id = ? AND album_id = ?`, cover, id)) {
 				throw new HttpError(400, 'Forsidebildet må ligge i albumet.');
 			}
+			if (
+				cover &&
+				row.type === 'folder' &&
+				!one(
+					`WITH RECURSIVE sub(id) AS (SELECT id FROM nodes WHERE id = ? UNION ALL SELECT n.id FROM nodes n JOIN sub ON n.parent_id = sub.id)
+					 SELECT 1 FROM photos WHERE id = ? AND album_id IN (SELECT id FROM sub)`,
+					id,
+					cover
+				)
+			) {
+				throw new HttpError(400, 'Forsidebildet må ligge i et album i mappa.');
+			}
 		}
 		run(
 			`UPDATE nodes SET parent_id = ?, name = ?, slug = ?, description = ?, visibility = ?, allow_download = ?, cover_photo_id = ?, updated_at = ? WHERE id = ?`,

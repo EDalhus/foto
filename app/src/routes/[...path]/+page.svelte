@@ -7,6 +7,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import Gallery from '$lib/components/Gallery.svelte';
 	import { formatDate, formatLocal, plural } from '$lib/format';
+	import { toast } from '$lib/toasts.svelte';
 
 	let { data, form } = $props();
 
@@ -54,6 +55,25 @@
 
 	const shown = $derived(onlyFavs && favorites ? sorted.filter((p) => favs.has(p.id)) : sorted);
 	let favError = $state('');
+
+	// --- Forsidebilde fra bildevisningen (bare for administratoren) ---
+	// Gjelder bare albumet det ble valgt i (siden gjenbrukes når man går til et annet album).
+	let coverPick = $state<{ album: string; id: string } | null>(null);
+	const coverOverride = $derived(coverPick?.album === node.id ? coverPick.id : null);
+	async function setCover(id: string) {
+		const before = coverPick;
+		coverPick = { album: node.id, id };
+		const res = await fetch(`/api/v1/albums/${node.id}/cover`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ photo: id })
+		}).catch(() => null);
+		if (res?.ok) toast('Forsidebildet er byttet.');
+		else {
+			coverPick = before;
+			toast('Klarte ikke å bytte forsidebilde.', 'error');
+		}
+	}
 
 	async function toggleFavorite(id: string) {
 		const on = !favs.has(id);
@@ -208,7 +228,14 @@
 			<p class="muted">Mappa er tom.</p>
 		{/if}
 	{:else if data.photos.length}
-		<Gallery photos={shown} albumName={node.name} {favorites} ontogglefavorite={toggleFavorite} />
+		<Gallery
+			photos={shown}
+			albumName={node.name}
+			{favorites}
+			ontogglefavorite={toggleFavorite}
+			coverId={data.isAdmin ? (coverOverride ?? data.coverId) : null}
+			onsetcover={data.isAdmin ? setCover : undefined}
+		/>
 	{:else}
 		<p class="muted">Albumet er tomt.</p>
 	{/if}
