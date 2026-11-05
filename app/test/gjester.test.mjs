@@ -303,6 +303,52 @@ check(page.text.includes('via «Familie»'), 'albumsiden viser arvet tilgang');
 await admin.action(`/admin/node/${node('hemmelig')}?/share`, {});
 check((await kari.get('/hemmelig')).status === 404, 'deling fjernet: 404 igjen');
 
+// --- Adminhandlinger krever administrator ----------------------------------------------------
+// SvelteKit kjører skjemahandlinger før load-funksjonene, så sjekken i admin/+layout.server.ts stopper dem ikke.
+console.log('6b. Adminhandlinger krever administrator');
+{
+	const anon = new Browser();
+	const olaId = q(`SELECT id FROM users WHERE email = 'ola@example.com'`)[0].id;
+	const count = () =>
+		JSON.stringify([
+			q('SELECT count(*) AS n FROM nodes')[0].n,
+			q('SELECT count(*) AS n FROM photos')[0].n,
+			q('SELECT count(*) AS n FROM groups')[0].n,
+			q('SELECT count(*) AS n FROM api_tokens')[0].n,
+			q('SELECT count(*) AS n FROM login_tokens')[0].n,
+			q(`SELECT count(*) AS n FROM settings WHERE key = 'watermark'`)[0].n
+		]);
+	const attempts = [
+		['/admin?/create', { name: 'Inntrenger', type: 'album', visibility: 'public' }],
+		[`/admin/node/${node('offentlig')}?/delete`, {}],
+		[`/admin/node/${node('offentlig')}?/deletePhotos`, { photo: photo.offentlig }],
+		[`/admin/node/${node('hemmelig')}?/save`, { name: 'Hacket', visibility: 'public' }],
+		['/admin/gjester?/createGroup', { name: 'Inntrengere', kind: 'family' }],
+		['/admin/gjester?/copyLink', { user: olaId }],
+		['/admin/tokens?/create', { name: 'bakdør' }],
+		['/admin/innstillinger?/watermark', { enabled: 'on', text: 'hacket', position: 'center' }],
+		['/admin/status?/check', {}]
+	];
+	const before = count();
+	let anonBlocked = true;
+	let guestBlocked = true;
+	let leaked = false;
+	for (const [url, form] of attempts) {
+		const a = await anon.action(url, form);
+		if (a.status !== 401) anonBlocked = false;
+		const g = await ola.action(url, form);
+		if (g.status !== 403) guestBlocked = false;
+		if (/login\/lenke/.test(a.text + g.text)) leaked = true;
+	}
+	check(anonBlocked, 'uinnlogget: alle adminhandlinger avvises (401)');
+	check(guestBlocked, 'gjest: alle adminhandlinger avvises (403)');
+	check(count() === before && q('SELECT name FROM nodes WHERE id = ?', node('hemmelig'))[0]?.name === 'Hemmelig', 'ingenting ble endret i databasen');
+	check(!leaked, 'ingen innloggingslenker lekker ut');
+	const plain = await anon.post(`/admin/node/${node('offentlig')}?/delete`, {});
+	check(plain.status === 303 && plain.location?.startsWith('/login'), 'vanlig skjema uten innlogging sendes til innlogging');
+	check((await anon.get('/admin')).status === 303, 'adminsidene krever fortsatt innlogging for å vises');
+}
+
 // --- Fjerne tilgang -------------------------------------------------------------------------
 console.log('7. Fjerne tilgang');
 await admin.action('/admin/gjester?/revoke', { group: clientId, node: node('kunde-a') });

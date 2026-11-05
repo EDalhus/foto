@@ -1,5 +1,6 @@
 import type { Handle, HandleServerError, ServerInit } from '@sveltejs/kit';
 import { ensureAdmin, purgeExpiredSessions, SESSION_COOKIE, userFromApiToken, userFromSession } from '$lib/server/auth';
+import { isAdmin } from '$lib/server/tree';
 import { startWorker } from '$lib/server/worker';
 
 export const init: ServerInit = async () => {
@@ -40,6 +41,22 @@ export const handle: Handle = async ({ event, resolve }) => {
 				? new Response(message, { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } })
 				: new Response(JSON.stringify({ error: message }), { status: 403, headers: { 'content-type': 'application/json' } });
 		}
+	}
+
+	// Alt som endrer noe under /admin krever administrator. Layout-sjekken i admin/+layout.server.ts er ikke nok:
+	// SvelteKit kjører skjemahandlinger (actions) før load-funksjonene, så den stopper bare visningen av sidene.
+	const path = event.url.pathname;
+	if ((path === '/admin' || path.startsWith('/admin/')) && method !== 'GET' && method !== 'HEAD' && !isAdmin(event.locals.user)) {
+		const loggedIn = !!event.locals.user;
+		const wantsHtml = event.request.headers.get('accept')?.includes('text/html') && !event.request.headers.has('x-sveltekit-action');
+		if (!loggedIn && wantsHtml) {
+			return new Response(null, { status: 303, headers: { location: `/login?next=${encodeURIComponent(path)}` } });
+		}
+		const message = loggedIn ? 'Ingen tilgang' : 'Ikke innlogget';
+		return new Response(JSON.stringify({ type: 'error', error: { message } }), {
+			status: loggedIn ? 403 : 401,
+			headers: { 'content-type': 'application/json' }
+		});
 	}
 
 	const response = await resolve(event);
