@@ -876,62 +876,65 @@ local back = JSON.decode(s)
 check(back.a == 'æøå "sitat" \n ny linje' and back.b[3] == 3 and back.c == true and back.d == 1.5, 'tur-retur')
 
 print('19b. Video')
-check(provider.canExportVideo == true, 'tjenesten kan eksportere video')
-local hidesVideo = false
-for _, n in ipairs(provider.hideSections) do if n == 'video' then hidesVideo = true end end
-check(hidesVideo, 'videoinnstillingene i Lightroom er skjult (pluginen bestemmer)')
-local es = {}
-blocking(provider.updateExportSettings, es)
-check(es.LR_includeVideoFiles == true and es.LR_export_videoFileHandling == 'include', 'videoer tas alltid med')
-check(es.LR_export_videoFormat == H264 and es.LR_export_videoPreset == 'h264-max', 'H.264 i beste kvalitet («Maks»)')
-videoPresetsFail = true
-local es2 = { LR_export_videoFormat = 'original' }
-blocking(provider.updateExportSettings, es2)
-videoPresetsFail = false
-check(es2.LR_export_videoFormat == H264 and es2.LR_export_videoPreset == 'original', 'uten SDK-et: H.264 med verdiene Lightroom selv lagrer')
+-- Egen funksjon: hovedfila er nær grensen på 200 lokale variabler.
+;(function()
+	check(provider.canExportVideo == true, 'tjenesten kan eksportere video')
+	local hidesVideo = false
+	for _, n in ipairs(provider.hideSections) do if n == 'video' then hidesVideo = true end end
+	check(hidesVideo, 'videoinnstillingene i Lightroom er skjult (pluginen bestemmer)')
+	local es = {}
+	blocking(provider.updateExportSettings, es)
+	check(es.LR_includeVideoFiles == true and es.LR_export_videoFileHandling == 'include', 'videoer tas alltid med')
+	check(es.LR_export_videoFormat == H264 and es.LR_export_videoPreset == 'h264-max', 'H.264 i beste kvalitet («Maks»)')
+	videoPresetsFail = true
+	local es2 = { LR_export_videoFormat = 'original' }
+	blocking(provider.updateExportSettings, es2)
+	videoPresetsFail = false
+	check(es2.LR_export_videoFormat == H264 and es2.LR_export_videoPreset == 'original', 'uten SDK-et: H.264 med verdiene Lightroom selv lagrer')
 
-local colFilm = mkObj('LrPublishedCollection', 'Film', nil, foto, { _settings = { visibility = 'public', allowDownload = true } })
-FotoAPI.CHUNK = 96 * 1024
-local logBefore = #httpLog
-local vids = { { file = 'klipp.mp4', lrId = 70, video = true, taken = '2026-09-14T10:22:31', meta = { title = 'Til kai', caption = 'Ankomst' } } }
-check(publish(colFilm, vids), 'eksportfila er slettet etterpå')
-check(vids[1].newId and not vids[1].failed, 'videoen er lastet opp' .. (vids[1].failed and (': ' .. vids[1].failed) or ''))
-local vrow = vids[1].newId and one("SELECT * FROM photos WHERE id = '" .. vids[1].newId .. "'") or {}
-check(vrow.kind == 'video' and vrow.mime == 'video/mp4' and vrow.title == 'Til kai' and vrow.caption == 'Ankomst', 'lagret som video, med tittel og bildetekst')
-check(vrow.taken_at == 1789381351000, 'opptakstiden fra Lightroom er med (' .. tostring(vrow.taken_at) .. ')')
-check(vrow.sha256 == __sha256(IMG .. '/klipp.mp4'), 'fila kom fram uendret')
-local puts = 0
-for i = logBefore + 1, #httpLog do if httpLog[i]:find('^PUT /api/v1/uploads/') then puts = puts + 1 end end
-check(puts >= 3, 'sendt i biter (' .. puts .. ' biter)')
+	local colFilm = mkObj('LrPublishedCollection', 'Film', nil, foto, { _settings = { visibility = 'public', allowDownload = true } })
+	FotoAPI.CHUNK = 96 * 1024
+	local logBefore = #httpLog
+	local vids = { { file = 'klipp.mp4', lrId = 70, video = true, taken = '2026-09-14T10:22:31', meta = { title = 'Til kai', caption = 'Ankomst' } } }
+	check(publish(colFilm, vids), 'eksportfila er slettet etterpå')
+	check(vids[1].newId and not vids[1].failed, 'videoen er lastet opp' .. (vids[1].failed and (': ' .. vids[1].failed) or ''))
+	local vrow = vids[1].newId and one("SELECT * FROM photos WHERE id = '" .. vids[1].newId .. "'") or {}
+	check(vrow.kind == 'video' and vrow.mime == 'video/mp4' and vrow.title == 'Til kai' and vrow.caption == 'Ankomst', 'lagret som video, med tittel og bildetekst')
+	check(vrow.taken_at == 1789381351000, 'opptakstiden fra Lightroom er med (' .. tostring(vrow.taken_at) .. ')')
+	check(vrow.sha256 == __sha256(IMG .. '/klipp.mp4'), 'fila kom fram uendret')
+	local puts = 0
+	for i = logBefore + 1, #httpLog do if httpLog[i]:find('^PUT /api/v1/uploads/') then puts = puts + 1 end end
+	check(puts >= 3, 'sendt i biter (' .. puts .. ' biter)')
 
-local buggy = { { file = 'klipp.mp4', lrId = 71, video = true, bug = true } }
-publish(colFilm, buggy)
-check(buggy[1].newId and not buggy[1].failed, 'Lightroom-feilen («false, nil» for video) går fint')
+	local buggy = { { file = 'klipp.mp4', lrId = 71, video = true, bug = true } }
+	publish(colFilm, buggy)
+	check(buggy[1].newId and not buggy[1].failed, 'Lightroom-feilen («false, nil» for video) går fint')
 
-local again = { { file = 'klipp.mp4', lrId = 70, video = true, publishedId = vids[1].newId } }
-publish(colFilm, again)
-check(again[1].newId == vids[1].newId and one("SELECT version FROM photos WHERE id = '" .. vids[1].newId .. "'").version == 2, 'ny versjon av videoen: samme ID, versjon 2')
-local goneVideo = { { file = 'klipp.mp4', lrId = 72, video = true, publishedId = 'finnesikkevideo' } }
-publish(colFilm, goneVideo)
-check(goneVideo[1].newId and goneVideo[1].newId ~= 'finnesikkevideo', 'video som er slettet på nettstedet, lastes opp som ny')
+	local again = { { file = 'klipp.mp4', lrId = 70, video = true, publishedId = vids[1].newId } }
+	publish(colFilm, again)
+	check(again[1].newId == vids[1].newId and one("SELECT version FROM photos WHERE id = '" .. vids[1].newId .. "'").version == 2, 'ny versjon av videoen: samme ID, versjon 2')
+	local goneVideo = { { file = 'klipp.mp4', lrId = 72, video = true, publishedId = 'finnesikkevideo' } }
+	publish(colFilm, goneVideo)
+	check(goneVideo[1].newId and goneVideo[1].newId ~= 'finnesikkevideo', 'video som er slettet på nettstedet, lastes opp som ny')
 
-httpFaults[#httpFaults + 1] = { pattern = 'PUT /api/v1/uploads/', errorCode = 'timedOut' }
-httpFaults[#httpFaults + 1] = { pattern = '/complete', status = 503 }
-local flaky = { { file = 'klipp.mp4', lrId = 73, video = true } }
-publish(colFilm, flaky)
-check(flaky[1].newId and not flaky[1].failed and #httpFaults == 0, 'en bit som feiler og en server som starter på nytt: prøves igjen')
-check(one("SELECT count(*) AS n FROM photos WHERE album_id = (SELECT album_id FROM photos WHERE id = '" .. flaky[1].newId .. "')").n == 4, 'ingen dobbel video i albumet')
+	httpFaults[#httpFaults + 1] = { pattern = 'PUT /api/v1/uploads/', errorCode = 'timedOut' }
+	httpFaults[#httpFaults + 1] = { pattern = '/complete', status = 503 }
+	local flaky = { { file = 'klipp.mp4', lrId = 73, video = true } }
+	publish(colFilm, flaky)
+	check(flaky[1].newId and not flaky[1].failed and #httpFaults == 0, 'en bit som feiler og en server som starter på nytt: prøves igjen')
+	check(one("SELECT count(*) AS n FROM photos WHERE album_id = (SELECT album_id FROM photos WHERE id = '" .. flaky[1].newId .. "')").n == 4, 'ingen dobbel video i albumet')
 
--- Store filer lastes også ned i biter (Synkroniser med Foto).
-local apiV = FotoAPI.new(settings)
-local target = TMP .. '/nedlastet-klipp.mp4'
-local bytes = one("SELECT bytes FROM photos WHERE id = '" .. vids[1].newId .. "'").bytes
-logBefore = #httpLog
-local got = task(function() return apiV:download(vids[1].newId, target, bytes) end)
-local gets = 0
-for i = logBefore + 1, #httpLog do if httpLog[i]:find('GET /download/photo/', 1, true) then gets = gets + 1 end end
-check(got == bytes and __size(target) == bytes and __sha256(target) == __sha256(IMG .. '/klipp.mp4') and gets >= 3, 'stor fil lastet ned i ' .. gets .. ' biter, uendret')
-FotoAPI.CHUNK = 32 * 1024 * 1024
+	-- Store filer lastes også ned i biter (Synkroniser med Foto).
+	local apiV = FotoAPI.new(settings)
+	local target = TMP .. '/nedlastet-klipp.mp4'
+	local bytes = one("SELECT bytes FROM photos WHERE id = '" .. vids[1].newId .. "'").bytes
+	logBefore = #httpLog
+	local got = task(function() return apiV:download(vids[1].newId, target, bytes) end)
+	local gets = 0
+	for i = logBefore + 1, #httpLog do if httpLog[i]:find('GET /download/photo/', 1, true) then gets = gets + 1 end end
+	check(got == bytes and __size(target) == bytes and __sha256(target) == __sha256(IMG .. '/klipp.mp4') and gets >= 3, 'stor fil lastet ned i ' .. gets .. ' biter, uendret')
+	FotoAPI.CHUNK = 32 * 1024 * 1024
+end)()
 
 print('20. Synkroniser med Foto')
 ;(function()
