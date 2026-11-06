@@ -1,5 +1,6 @@
 <script lang="ts">
 	import CardGrid from '$lib/components/CardGrid.svelte';
+	import CategoryCards from '$lib/components/CategoryCards.svelte';
 
 	let { data } = $props();
 	const cover = $derived(data.cards.find((c) => c.cover && !c.isPrivate)?.cover);
@@ -31,7 +32,9 @@
 		{#if data.cards.length}<h2 class="more">Alle album</h2>{/if}
 	{/if}
 
-	{#if data.cards.length}
+	{#if data.grouping}
+		<CategoryCards grouping={data.grouping} />
+	{:else if data.cards.length}
 		<CardGrid cards={data.cards} />
 	{:else if !data.shared.length}
 		<div class="empty">

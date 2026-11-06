@@ -25,6 +25,12 @@ export interface PhotoView extends ImageView {
 	};
 	download: string | null;
 	og: string;
+	kind: 'photo' | 'video';
+	/** Video: lengde i sekunder. */
+	duration: number | null;
+	/** Video: avspillingsversjonen, eller null mens den lages (eller hvis den feilet). */
+	video: string | null;
+	videoState: 'pending' | 'ready' | 'failed' | null;
 }
 
 export interface CardView {
@@ -37,6 +43,26 @@ export interface CardView {
 	latest: number;
 	isPrivate: boolean;
 	cover: ImageView | null;
+	/** Kategorien kortet står i (bare når mappa viser kategorier). */
+	category?: { name: string; color: string | null } | null;
+}
+
+/** Hvordan kategoriene i en mappe vises for kundene. */
+export type CategoryStyle = 'sections' | 'tags' | 'filter' | 'boxes' | 'rows' | 'stacks';
+
+/** En kategori med kortene sine. id null = det som ikke har kategori («Andre»). */
+export interface CardGroup {
+	id: string | null;
+	name: string;
+	slug: string;
+	description: string;
+	color: string | null;
+	cards: CardView[];
+}
+
+export interface Grouping {
+	style: CategoryStyle;
+	groups: CardGroup[];
 }
 
 export interface Crumb {

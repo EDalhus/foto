@@ -3,6 +3,7 @@
 
 	Samlingssett i Lightroom blir mapper på nettstedet, samlinger blir album.
 	Ved publisering eksporterer Lightroom ferdig redigerte JPEG-er som lastes opp.
+	Videoer eksporteres som H.264 (MP4) i beste kvalitet og lastes opp i biter, så store filer går fint.
 	RAW-filene dine røres aldri.
 
 	NB for utviklere: kall som leser katalogen kan «yielde». Pakk dem i LrTasks.pcall, aldri i vanlig pcall
@@ -12,6 +13,7 @@
 local LrApplication = import 'LrApplication'
 local LrDialogs = import 'LrDialogs'
 local LrDate = import 'LrDate'
+local LrExportSettings = import 'LrExportSettings'
 local LrFileUtils = import 'LrFileUtils'
 local LrHttp = import 'LrHttp'
 local LrPathUtils = import 'LrPathUtils'
@@ -35,11 +37,42 @@ provider.exportPresetFields = {
 	{ key = 'serviceKey', default = '' },
 	{ key = 'siteName', default = '' },
 }
-provider.hideSections = { 'exportLocation' }
+provider.hideSections = { 'exportLocation', 'video' }
 provider.allowFileFormats = { 'JPEG' }
 provider.allowColorSpaces = { 'sRGB' }
 provider.hidePrintResolution = true
-provider.canExportVideo = false
+provider.canExportVideo = true
+
+-- Video: alltid med, alltid som H.264 i beste kvalitet. Da tar Lightroom med justeringene og trimmingen din,
+-- og fila kan spilles av overalt. (Verdien er den Lightroom selv lagrer for H.264 i eksportforhåndsinnstillinger.)
+local H264 = '4e49434b-4832-3634-fbfb-fbfbfbfbfbfb'
+
+local function useBestH264(s)
+	-- Helst Lightroom sin egen «Maks»-kvalitet (så nær originalen som mulig) via SDK-et …
+	local ok = pcall(function()
+		local best, first
+		for _, preset in ipairs(LrExportSettings.videoExportPresets() or {}) do
+			if preset:formatID() == H264 then
+				first = first or preset
+				local name = string.lower(tostring(preset:name() or ''))
+				if not best and (name:find('^max') or name:find('^maks')) then best = preset end
+			end
+		end
+		if not (best or first) then error('fant ingen H.264-innstilling') end
+		LrExportSettings.applyVideoExportPreset(s, best or first)
+	end)
+	-- … ellers verdiene Lightroom bruker i sine egne forhåndsinnstillinger.
+	if not ok or s.LR_export_videoFormat ~= H264 then
+		s.LR_export_videoFormat = H264
+		s.LR_export_videoPreset = 'original'
+	end
+end
+
+function provider.updateExportSettings(exportSettings)
+	exportSettings.LR_includeVideoFiles = true
+	exportSettings.LR_export_videoFileHandling = 'include'
+	useBestH264(exportSettings)
+end
 
 -- Publisering: navn og oppførsel i Lightroom ----------------------------------
 
@@ -264,10 +297,11 @@ function provider.sectionsForTopOfDialog(f, propertyTable)
 				f:spacer { width = share 'fotoLabelWidth' },
 				f:static_text {
 					title = 'Tips: velg full størrelse og høy kvalitet under «Bildestørrelse» og «Filinnstillinger» – '
-						.. 'det er denne fila som kan lastes ned i full oppløsning.',
+						.. 'det er denne fila som kan lastes ned i full oppløsning.\n'
+						.. 'Videoer lastes opp som H.264 (MP4) i beste kvalitet, med justeringene og trimmingen din.',
 					fill_horizontal = 1,
 					width_in_chars = 50,
-					height_in_lines = 2,
+					height_in_lines = 3,
 				},
 			},
 		},
@@ -450,6 +484,28 @@ local function metadataOf(photo)
 	}
 end
 
+-- Filendelser Lightroom (eller kameraet) bruker for video.
+local VIDEO_EXT = {
+	mp4 = true, mov = true, m4v = true, avi = true, mts = true, m2ts = true, mpg = true, mpeg = true,
+	['3gp'] = true, mkv = true, webm = true,
+}
+
+local function isVideoFile(path)
+	return VIDEO_EXT[string.lower(tostring(path or ''):match('%.([%w]+)$') or '')] == true
+end
+
+local function isVideoPhoto(photo)
+	local ok, v = LrTasks.pcall(function() return photo:getRawMetadata('isVideo') end)
+	return ok and v == true
+end
+
+--- Opptakstiden slik Lightroom har den («2026-09-14T10:22:31»). Videofila selv har den ofte ikke.
+local function takenAtOf(photo)
+	local ok, iso = LrTasks.pcall(function() return photo:getRawMetadata('dateTimeOriginalISO8601') end)
+	if ok and type(iso) == 'string' then return iso:match('^(%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d)') end
+	return nil
+end
+
 function provider.processRenderedPhotos(functionContext, exportContext)
 	local exportSession = exportContext.exportSession
 	local settings = assert(exportContext.propertyTable)
@@ -469,20 +525,41 @@ function provider.processRenderedPhotos(functionContext, exportContext)
 		local base = (i - 1) / math.max(nPhotos, 1)
 		progressScope:setPortionComplete(base)
 		if not rendition.wasSkipped then
+			local video = isVideoPhoto(rendition.photo)
 			local success, pathOrMessage = rendition:waitForRender()
+			-- Kjent feil i Lightroom: waitForRender svarer «false, nil» for video selv om eksporten gikk bra.
+			if not success and pathOrMessage == nil and video then
+				local dest = rendition.destinationPath
+				if dest and LrFileUtils.exists(dest) == 'file' then
+					success, pathOrMessage = true, dest
+					Log.info('Lightroom meldte feil for en video som ble eksportert likevel – bruker', LrPathUtils.leafName(dest))
+				end
+			end
 			if progressScope:isCanceled() then
 				if success then LrFileUtils.delete(pathOrMessage) end
 				break
 			end
 			if success then
+				video = video or isVideoFile(pathOrMessage)
 				local meta = metadataOf(rendition.photo)
+				if video then meta.takenAt = takenAtOf(rendition.photo) end
 				local function onProgress(fraction)
 					local f = math.min(math.max(fraction, 0), 1)
 					progressScope:setPortionComplete(base + (0.3 + 0.7 * f) / math.max(nPhotos, 1))
 				end
 				local ok, result = LrTasks.pcall(function()
 					local existing = rendition.publishedPhotoId
-					if existing and existing ~= '' then
+					if existing == '' then existing = nil end
+					if video then
+						-- Video kan være flere GB: lastes opp i biter.
+						if existing then
+							local replaced = api:uploadLarge(album.id, pathOrMessage, meta, onProgress, existing)
+							if replaced then return replaced end
+							Log.info('Videoen', existing, 'finnes ikke lenger på nettstedet – lastes opp som ny')
+						end
+						return api:uploadLarge(album.id, pathOrMessage, meta, onProgress)
+					end
+					if existing then
 						local replaced = api:replacePhoto(existing, pathOrMessage, meta, onProgress)
 						if replaced then return replaced end
 						Log.info('Bildet', existing, 'finnes ikke lenger på nettstedet – lastes opp som nytt')
@@ -502,8 +579,9 @@ function provider.processRenderedPhotos(functionContext, exportContext)
 					failed = failed + 1
 				end
 			else
-				Log.error('Lightroom klarte ikke å eksportere et bilde:', tostring(pathOrMessage))
-				rendition:uploadFailed(pathOrMessage)
+				local what = video and 'en video' or 'et bilde'
+				Log.error('Lightroom klarte ikke å eksportere ' .. what .. ':', tostring(pathOrMessage))
+				rendition:uploadFailed(pathOrMessage or ('Lightroom klarte ikke å eksportere ' .. what .. '.'))
 				failed = failed + 1
 			end
 		end

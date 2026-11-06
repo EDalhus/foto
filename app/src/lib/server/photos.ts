@@ -7,9 +7,10 @@ import { pipeline } from 'node:stream/promises';
 import { config } from './config';
 import { all, one, run, tx } from './db';
 import { newId, now } from './ids';
-import { processImage, UnsupportedImageError, type ExifSummary, type SizeInfo } from './images';
+import { parseExifDate, processFrame, processImage, UnsupportedImageError, type ExifSummary, type SizeInfo } from './images';
 import { albumIdsUnder, HttpError, invalidate } from './tree';
-import { kickWorker } from './worker';
+import { containerType, extractFrame, looksLikeVideo, probe, UnsupportedVideoError, type VideoInfo } from './video';
+import { cancelVideo, kickVideo, kickWorker } from './worker';
 
 export interface PhotoRow {
 	id: string;
@@ -35,12 +36,22 @@ export interface PhotoRow {
 	original_attempts: number;
 	created_at: number;
 	updated_at: number;
+	kind: 'photo' | 'video';
+	/** Video: lengde i sekunder. */
+	duration: number | null;
+	/** Video: VideoInfo som JSON. */
+	video: string | null;
+	/** Video: avspillingsversjonen (video.mp4) – lages i bakgrunnen. */
+	video_state: 'pending' | 'ready' | 'failed' | null;
+	video_error: string | null;
+	video_attempts: number;
 }
 
-export interface Photo extends Omit<PhotoRow, 'keywords' | 'exif' | 'sizes'> {
+export interface Photo extends Omit<PhotoRow, 'keywords' | 'exif' | 'sizes' | 'video'> {
 	keywords: string[];
 	exif: ExifSummary;
 	sizes: SizeInfo[];
+	video: VideoInfo | null;
 }
 
 export function parsePhoto(row: PhotoRow): Photo {
@@ -48,7 +59,8 @@ export function parsePhoto(row: PhotoRow): Photo {
 		...row,
 		keywords: safeJson(row.keywords, []),
 		exif: safeJson(row.exif, {}),
-		sizes: safeJson(row.sizes, [])
+		sizes: safeJson(row.sizes, []),
+		video: row.video ? safeJson<VideoInfo | null>(row.video, null) : null
 	};
 }
 
@@ -117,54 +129,150 @@ function cleanText(value: unknown, max: number): string {
 
 export interface IngestInput {
 	albumId: string;
-	file: File;
+	/** Fila fra et skjema … */
+	file?: File;
+	/** … eller en fil som allerede ligger på disk (opplasting i biter). Den flyttes inn og er borte etterpå. */
+	path?: string;
+	/** Filnavnet når `path` brukes. */
+	filename?: string;
 	/** undefined = bruk det som ligger i bildefila (XMP/IPTC). */
 	title?: string;
 	caption?: string;
 	keywords?: string[];
+	/** Opptakstid fra Lightroom (veggklokke, «2026-09-14T10:22:31») – brukes for video, der fila sjelden har den. */
+	takenAt?: string;
 	/** Erstatt et eksisterende bilde (ny versjon, samme ID og plass i albumet). */
 	replaceId?: string;
 }
 
-/** Lagrer en opplasting: lager webversjoner med en gang, originalen sendes til lagringen i bakgrunnen. */
+/** Det som er felles for bilder og video etter at fila er lest. */
+interface Prepared {
+	kind: 'photo' | 'video';
+	mime: string;
+	ext: string;
+	width: number;
+	height: number;
+	sizes: SizeInfo[];
+	color: string | null;
+	exif: ExifSummary;
+	embedded: { title: string; caption: string; keywords: string[]; takenAt: number | null };
+	duration: number | null;
+	video: VideoInfo | null;
+}
+
+/** Veggklokke for en video: Lightroom sin opptakstid, ellers fila sin (UTC gjøres om til norsk tid). */
+function videoTakenAt(given: string | undefined, info: VideoInfo): number | null {
+	const fromLr = parseExifDate(given);
+	if (fromLr) return fromLr;
+	const c = info.createdAt;
+	if (!c) return null;
+	if (!/Z$|[+-]\d{2}:?\d{2}$/.test(c)) return parseExifDate(c);
+	const t = Date.parse(c);
+	if (!Number.isFinite(t) || t < Date.UTC(1990, 0, 1)) return null;
+	const parts = new Intl.DateTimeFormat('sv-SE', {
+		timeZone: 'Europe/Oslo',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+		hourCycle: 'h23'
+	}).format(t);
+	return parseExifDate(parts.replace(' ', 'T'));
+}
+
+async function prepare(file: string, staging: string, filename: string, takenAt: string | undefined, bytes: number): Promise<Prepared> {
+	if (await looksLikeVideo(file)) {
+		let info: VideoInfo;
+		const frame = `${staging}.frame.png`;
+		try {
+			info = await probe(file);
+			await extractFrame(file, info, frame);
+			const d = await processFrame(frame, staging);
+			const { mime, ext } = containerType(info, filename);
+			return {
+				kind: 'video',
+				mime,
+				ext,
+				width: d.width,
+				height: d.height,
+				sizes: d.sizes,
+				color: d.color,
+				exif: { make: info.make, model: info.model },
+				embedded: { title: '', caption: '', keywords: [], takenAt: videoTakenAt(takenAt, info) },
+				duration: info.duration,
+				video: info
+			};
+		} catch (err) {
+			if (err instanceof UnsupportedVideoError || err instanceof UnsupportedImageError) throw new HttpError(415, err.message);
+			throw err;
+		} finally {
+			await fsp.rm(frame, { force: true }).catch(() => {});
+		}
+	}
+	if (bytes > config.maxUploadBytes) throw new HttpError(413, 'Bildet er for stort.');
+	try {
+		const p = await processImage(file, staging);
+		return { ...p, kind: 'photo', duration: null, video: null };
+	} catch (err) {
+		if (err instanceof UnsupportedImageError) throw new HttpError(415, err.message);
+		throw err;
+	}
+}
+
+/** Sjekksum og størrelse for en fil som allerede ligger på disk. */
+async function hashFile(file: string): Promise<{ sha256: string; bytes: number }> {
+	const hash = createHash('sha256');
+	let bytes = 0;
+	const stream = fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 });
+	for await (const chunk of stream as AsyncIterable<Buffer>) {
+		hash.update(chunk);
+		bytes += chunk.length;
+	}
+	return { sha256: hash.digest('hex'), bytes };
+}
+
+/** Lagrer en opplasting: lager webversjoner med en gang, originalen sendes til lagringen i bakgrunnen. Video får også en avspillingsversjon i bakgrunnen. */
 export async function ingest(input: IngestInput): Promise<Photo> {
 	const album = one<{ id: string; type: string }>(`SELECT id, type FROM nodes WHERE id = ?`, input.albumId);
 	if (!album) throw new HttpError(404, 'Albumet finnes ikke.');
 	if (album.type !== 'album') throw new HttpError(400, 'Bilder kan bare lastes opp til album.');
 	const existing = input.replaceId ? getPhoto(input.replaceId) : null;
 	if (input.replaceId && !existing) throw new HttpError(404, 'Bildet som skulle erstattes finnes ikke.');
-	if (!input.file || typeof input.file.stream !== 'function') throw new HttpError(400, 'Fil mangler.');
-	if (input.file.size > config.maxUploadBytes) throw new HttpError(413, 'Fila er for stor.');
+	if (!input.path && (!input.file || typeof input.file.stream !== 'function')) throw new HttpError(400, 'Fil mangler.');
+	if (input.file && input.file.size > config.maxUploadBytes) throw new HttpError(413, 'Fila er for stor.');
 
-	await Promise.all(
-		[config.tmpDir, config.pendingDir, config.derivedDir].map((d) => fsp.mkdir(d, { recursive: true }))
-	);
-	const tmpFile = path.join(config.tmpDir, randomUUID());
+	await Promise.all([config.tmpDir, config.pendingDir, config.derivedDir].map((d) => fsp.mkdir(d, { recursive: true })));
+	// Fra skjema skrives fila til en egen midlertidig fil; fra opplasting i biter brukes fila som allerede ligger der.
+	const tmpFile = input.path ?? path.join(config.tmpDir, randomUUID());
 	const staging = path.join(config.tmpDir, `${randomUUID()}.d`);
+	let moved = false;
 	try {
 		// 1. Skriv fila til disk og regn ut sjekksum underveis.
-		const hash = createHash('sha256');
+		let sha256: string;
 		let bytes = 0;
-		const source = Readable.fromWeb(input.file.stream() as never);
-		source.on('data', (chunk: Buffer) => {
-			hash.update(chunk);
-			bytes += chunk.length;
-		});
-		await pipeline(source, fs.createWriteStream(tmpFile));
-		if (bytes === 0) throw new HttpError(400, 'Fila er tom.');
-
-		// 2. Webversjoner + metadata.
-		let processed;
-		try {
-			processed = await processImage(tmpFile, staging);
-		} catch (err) {
-			if (err instanceof UnsupportedImageError) throw new HttpError(415, err.message);
-			throw err;
+		if (input.file) {
+			const hash = createHash('sha256');
+			const source = Readable.fromWeb(input.file.stream() as never);
+			source.on('data', (chunk: Buffer) => {
+				hash.update(chunk);
+				bytes += chunk.length;
+			});
+			await pipeline(source, fs.createWriteStream(tmpFile));
+			sha256 = hash.digest('hex');
+		} else {
+			({ sha256, bytes } = await hashFile(tmpFile));
 		}
+		if (bytes === 0) throw new HttpError(400, 'Fila er tom.');
+		const rawName = input.file?.name || input.filename || '';
+
+		// 2. Webversjoner + metadata (for video: stillbilde, lengde og mål).
+		const processed = await prepare(tmpFile, staging, rawName, input.takenAt, bytes);
 
 		const id = existing?.id ?? newId();
 		const version = existing ? existing.version + 1 : 1;
-		const filename = cleanText(input.file.name || `bilde${processed.ext}`, 255);
+		const filename = cleanText(rawName || `${processed.kind === 'video' ? 'video' : 'bilde'}${processed.ext}`, 255);
 		const d = new Date();
 		const month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 		const key = `${month}/${id}_v${version}_${safeFileName(filename)}${processed.ext}`;
@@ -177,18 +285,20 @@ export async function ingest(input: IngestInput): Promise<Photo> {
 		// 3. Flytt filene på plass før databasen oppdateres.
 		const pending = pendingFile({ id, version, original_key: key });
 		await fsp.rename(tmpFile, pending);
+		moved = true;
 		const finalDerived = derivedDir(id, version);
 		await fsp.rm(finalDerived, { recursive: true, force: true });
 		await fsp.mkdir(path.dirname(finalDerived), { recursive: true });
 		await fsp.rename(staging, finalDerived);
 
 		const t = now();
+		const isVideo = processed.kind === 'video';
 		const values = {
 			version,
 			filename,
 			mime: processed.mime,
 			bytes,
-			sha256: hash.digest('hex'),
+			sha256,
 			width: processed.width,
 			height: processed.height,
 			title,
@@ -198,7 +308,11 @@ export async function ingest(input: IngestInput): Promise<Photo> {
 			exif: JSON.stringify(processed.exif),
 			color: processed.color,
 			sizes: JSON.stringify(processed.sizes),
-			original_key: key
+			original_key: key,
+			kind: processed.kind,
+			duration: processed.duration,
+			video: processed.video ? JSON.stringify(processed.video) : null,
+			video_state: isVideo ? 'pending' : null
 		};
 
 		try {
@@ -209,21 +323,22 @@ export async function ingest(input: IngestInput): Promise<Photo> {
 					run(
 						`UPDATE photos SET version = ?, filename = ?, mime = ?, bytes = ?, sha256 = ?, width = ?, height = ?, title = ?, caption = ?,
 						 keywords = ?, taken_at = ?, exif = ?, color = ?, sizes = ?, original_key = ?, original_state = 'pending',
-						 original_error = NULL, original_attempts = 0, updated_at = ? WHERE id = ?`,
+						 original_error = NULL, original_attempts = 0, kind = ?, duration = ?, video = ?, video_state = ?, video_error = NULL,
+						 video_attempts = 0, updated_at = ? WHERE id = ?`,
 						values.version, values.filename, values.mime, values.bytes, values.sha256, values.width, values.height,
 						values.title, values.caption, values.keywords, values.taken_at, values.exif, values.color, values.sizes,
-						values.original_key, t, existing.id
+						values.original_key, values.kind, values.duration, values.video, values.video_state, t, existing.id
 					);
 					forgetOriginal(cur);
 				} else {
 					const max = one<{ m: number | null }>(`SELECT max(sort_index) AS m FROM photos WHERE album_id = ?`, album.id);
 					run(
 						`INSERT INTO photos (id, album_id, sort_index, version, filename, mime, bytes, sha256, width, height, title, caption,
-						 keywords, taken_at, exif, color, sizes, original_key, original_state, created_at, updated_at)
-						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+						 keywords, taken_at, exif, color, sizes, original_key, original_state, kind, duration, video, video_state, created_at, updated_at)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
 						id, album.id, (max?.m ?? -1) + 1, values.version, values.filename, values.mime, values.bytes, values.sha256,
 						values.width, values.height, values.title, values.caption, values.keywords, values.taken_at, values.exif,
-						values.color, values.sizes, values.original_key, t, t
+						values.color, values.sizes, values.original_key, values.kind, values.duration, values.video, values.video_state, t, t
 					);
 				}
 				run(`UPDATE nodes SET updated_at = ? WHERE id = ?`, t, album.id);
@@ -233,12 +348,17 @@ export async function ingest(input: IngestInput): Promise<Photo> {
 			await fsp.rm(finalDerived, { recursive: true, force: true });
 			throw err;
 		}
-		if (existing) await fsp.rm(derivedDir(existing.id, existing.version), { recursive: true, force: true });
+		if (existing) {
+			cancelVideo(existing.id);
+			await fsp.rm(derivedDir(existing.id, existing.version), { recursive: true, force: true });
+		}
 		invalidate();
 		kickWorker();
+		if (isVideo) kickVideo();
 		return getPhoto(id)!;
 	} finally {
-		await fsp.rm(tmpFile, { force: true }).catch(() => {});
+		// En fil fra opplasting i biter ryddes av den som eier den (den kan prøves på nytt).
+		if (!input.path && !moved) await fsp.rm(tmpFile, { force: true }).catch(() => {});
 		await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
 	}
 }
@@ -267,7 +387,10 @@ export async function deletePhotos(ids: string[]): Promise<string[]> {
 			run(`UPDATE nodes SET cover_photo_id = NULL WHERE cover_photo_id = ?`, r.id);
 		}
 	});
-	for (const r of rows) await fsp.rm(path.join(config.derivedDir, r.id), { recursive: true, force: true });
+	for (const r of rows) {
+		cancelVideo(r.id);
+		await fsp.rm(path.join(config.derivedDir, r.id), { recursive: true, force: true });
+	}
 	invalidate();
 	kickWorker();
 	return rows.map((r) => r.id);

@@ -161,6 +161,41 @@ const MIGRATIONS: string[] = [
 		PRIMARY KEY (user_id, node_id)
 	);
 	CREATE INDEX guest_activity_node ON guest_activity (node_id);
+	`,
+	// 5: video (avspillingsversjon lages i bakgrunnen), opplasting i biter for store filer,
+	//    og kategorier som deler innholdet i en mappe inn i grupper (f.eks. båter etter rederi).
+	`
+	ALTER TABLE photos ADD COLUMN kind TEXT NOT NULL DEFAULT 'photo';
+	ALTER TABLE photos ADD COLUMN duration REAL;
+	ALTER TABLE photos ADD COLUMN video TEXT;
+	ALTER TABLE photos ADD COLUMN video_state TEXT;
+	ALTER TABLE photos ADD COLUMN video_error TEXT;
+	ALTER TABLE photos ADD COLUMN video_attempts INTEGER NOT NULL DEFAULT 0;
+	CREATE INDEX photos_video_pending ON photos (video_state) WHERE video_state = 'pending';
+	CREATE TABLE uploads (
+		id TEXT PRIMARY KEY,
+		album_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+		replace_id TEXT,
+		filename TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		received INTEGER NOT NULL DEFAULT 0,
+		meta TEXT NOT NULL DEFAULT '{}',
+		photo_id TEXT,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE TABLE categories (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT REFERENCES nodes(id) ON DELETE CASCADE,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		color TEXT,
+		sort_index INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL
+	);
+	CREATE INDEX categories_parent ON categories (ifnull(parent_id, ''), sort_index);
+	ALTER TABLE nodes ADD COLUMN category_id TEXT REFERENCES categories(id) ON DELETE SET NULL;
+	ALTER TABLE nodes ADD COLUMN category_style TEXT;
 	`
 ];
 

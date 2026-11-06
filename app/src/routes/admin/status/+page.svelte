@@ -35,6 +35,18 @@
 		<span class="faint small">{plural(data.albums, 'album', 'album')} · {formatBytes(data.totals.bytes)} originaler</span>
 	</div>
 	<div class="card">
+		<span class="label">Video</span>
+		<span class="value">
+			{#if data.video.ffmpeg}<span class="badge ok"><Icon name="check" size={12} /> Klar</span>
+			{:else}<span class="badge bad">ffmpeg mangler</span>{/if}
+		</span>
+		<span class="faint small">
+			{#if data.video.ffmpeg}ffmpeg {data.video.ffmpeg} · {plural(data.video.total, 'video', 'videoer')}{:else}Videoer kan ikke lastes opp før ffmpeg er installert.{/if}
+		</span>
+		{#if data.video.pending}<span class="faint small">{data.video.pending} gjøres klar for avspilling{data.video.busy ? ' (en er i gang nå)' : ''}.</span>{/if}
+		{#if data.video.failed}<span class="err small">{plural(data.video.failed, 'video', 'videoer')} kunne ikke gjøres klar. Prøv igjen fra albumet.</span>{/if}
+	</div>
+	<div class="card">
 		<span class="label">Database-backup</span>
 		{#if data.backup.enabled}
 			<span class="value">{data.backup.lastBackupAt ? formatLocal(data.backup.lastBackupAt) : 'Ikke tatt ennå'}</span>

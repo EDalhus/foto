@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
+	import CategoryPanel from '$lib/components/CategoryPanel.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import { formatMonth, plural } from '$lib/format';
 	import { submit } from '$lib/submit';
@@ -8,6 +9,7 @@
 
 	let { data } = $props();
 	let showCreate = $state(false);
+	let showHomeCats = $state(false);
 	let createType = $state<'album' | 'folder'>('album');
 
 	// --- Filter og søk ---
@@ -102,10 +104,20 @@
 		<p class="muted">Mapper og album. Det du publiserer fra Lightroom havner her automatisk.</p>
 	</div>
 	<div class="buttons">
+		<button class="btn ghost" type="button" onclick={() => (showHomeCats = !showHomeCats)} aria-expanded={showHomeCats}
+			><Icon name="sliders" /> Kategorier på forsiden{#if data.homeCategories.length}&nbsp;<span class="faint">{data.homeCategories.length}</span>{/if}</button
+		>
 		<button class="btn" onclick={() => ((createType = 'folder'), (showCreate = true))}><Icon name="folder" /> Ny mappe</button>
 		<button class="btn primary" onclick={() => ((createType = 'album'), (showCreate = true))}><Icon name="plus" /> Nytt album</button>
 	</div>
 </div>
+
+{#if showHomeCats}
+	<div class="home-cats">
+		<CategoryPanel categories={data.homeCategories} style={data.homeStyle} colors={data.colors} previewHref="/" where="forsiden" />
+		<p class="hint">Mappene og albumene på toppnivå legges i en kategori under «Om albumet» på hver av dem.</p>
+	</div>
+{/if}
 
 {#if showCreate}
 	<form method="POST" action="?/create" class="create" use:enhance={submit()}>
@@ -248,7 +260,11 @@
 							/>{/if}
 					</span>
 					<span class="text">
-						<span class="name">{r.name}</span>
+						<span class="name"
+							>{r.name}{#if r.category}<span class="ctag"
+									><i style:background={r.category.hex ?? undefined} class:none={!r.category.hex}></i>{r.category.name}</span
+								>{/if}</span
+						>
 						<span class="sub">
 							{#if flat && r.trail}{r.trail} · {/if}{r.type === 'album'
 								? plural(r.photoCount, 'bilde', 'bilder')
@@ -278,6 +294,38 @@
 {/if}
 
 <style>
+	.home-cats {
+		display: grid;
+		gap: 8px;
+		max-width: 560px;
+		margin-bottom: 22px;
+	}
+	.home-cats .hint {
+		font-size: 13px;
+		color: var(--muted);
+		padding: 0 4px;
+	}
+	.ctag {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		margin-left: 8px;
+		padding: 1px 7px;
+		border-radius: 999px;
+		background: var(--surface-3);
+		color: var(--muted);
+		font-size: 11.5px;
+		font-weight: 500;
+		vertical-align: 1px;
+	}
+	.ctag i {
+		width: 7px;
+		height: 7px;
+		border-radius: 999px;
+	}
+	.ctag i.none {
+		display: none;
+	}
 	.head {
 		display: flex;
 		flex-wrap: wrap;

@@ -5,6 +5,9 @@
 	Forbigående feil (serveren starter på nytt, nettet hikker) prøves på nytt et par ganger.
 	Opplasting av nye bilder prøves bare på nytt når vi vet at serveren ikke fikk forespørselen,
 	så et bilde aldri havner to ganger i albumet.
+
+	Store filer (video) lastes opp i biter på 32 MB. Hver bit kan sendes på nytt uten skade, og serveren
+	sier fra hvor langt den har kommet, så en nettfeil midt i en stor video koster bare én bit.
 ]]
 
 local LrFileUtils = import 'LrFileUtils'
@@ -21,7 +24,7 @@ local FotoAPI = {}
 FotoAPI.__index = FotoAPI
 
 --- Holdes lik VERSION i Info.lua. Sendes til serveren i X-Foto-Plugin.
-FotoAPI.VERSION = '0.4.0'
+FotoAPI.VERSION = '0.5.0'
 
 local function trim(s)
 	return (tostring(s or ''):gsub('^%s+', ''):gsub('%s+$', ''))
@@ -166,15 +169,26 @@ end
 
 function FotoAPI:postJson(path, payload, opts)
 	local body = JSON.encode(payload or {})
-	return parse(self:request('POST ' .. path, opts or { idempotent = true }, function()
+	opts = opts or { idempotent = true }
+	return parse(self:request('POST ' .. path, opts, function()
 		return LrHttp.post(
 			self.base .. path,
 			body,
 			self:headers({ { field = 'Content-Type', value = 'application/json' } }),
 			'POST',
-			60
+			opts.timeout or 60
 		)
 	end))
+end
+
+local CONTENT_TYPES = {
+	jpg = 'image/jpeg', jpeg = 'image/jpeg', png = 'image/png', tif = 'image/tiff', tiff = 'image/tiff',
+	mp4 = 'video/mp4', m4v = 'video/mp4', mov = 'video/quicktime',
+}
+
+local function contentTypeOf(filePath)
+	local ext = string.lower(tostring(filePath or ''):match('%.([%w]+)$') or '')
+	return CONTENT_TYPES[ext] or 'application/octet-stream'
 end
 
 --- Laster opp en fil. onProgress(0..1) kalles underveis hvis Lightroom støtter det.
@@ -184,7 +198,7 @@ function FotoAPI:postFile(path, filePath, fields, opts, onProgress)
 			name = 'file',
 			fileName = LrPathUtils.leafName(filePath),
 			filePath = filePath,
-			contentType = 'image/jpeg',
+			contentType = contentTypeOf(filePath),
 		},
 	}
 	local names = {}
@@ -279,6 +293,75 @@ function FotoAPI:replacePhoto(photoId, filePath, meta, onProgress)
 	return ensure(data, status, 'Ny versjon feilet')
 end
 
+--- Bitstørrelse for store filer. Serveren kan be om mindre, aldri større.
+FotoAPI.CHUNK = 32 * 1024 * 1024
+
+--- Laster opp en stor fil (video) i biter. replaceId: ny versjon av et bilde/en video som finnes.
+--- Returnerer { id, version, kind, url }, eller nil hvis replaceId ikke finnes på nettstedet lenger.
+function FotoAPI:uploadLarge(albumId, filePath, meta, onProgress, replaceId)
+	local attrs = LrFileUtils.fileAttributes(filePath)
+	local size = attrs and tonumber(attrs.fileSize)
+	if not size or size <= 0 then error('Fant ikke fila som skulle lastes opp: ' .. LrPathUtils.leafName(filePath), 0) end
+	local payload = { albumId = albumId, filename = LrPathUtils.leafName(filePath), size = size, replaceId = replaceId }
+	for k, v in pairs(meta or {}) do payload[k] = v end
+	-- Å starte er trygt å gjenta: en opplasting som aldri brukes, rydder serveren bort.
+	local start, status = self:postJson('/api/v1/uploads', payload)
+	-- 404 uten feilmelding fra oss: serveren er eldre enn denne pluginen.
+	if status == 404 and not (type(start) == 'table' and start.error) then
+		error('Foto-serveren tar ikke imot video ennå. Oppdater Foto på serveren og publiser på nytt.', 0)
+	end
+	if status == 404 and replaceId then return nil end
+	start = ensure(start, status, 'Opplastingen feilet')
+	local id = tostring(start.id or '')
+	if id == '' then error('Opplastingen feilet: serveren svarte uten ID.', 0) end
+	local chunkSize = math.min(tonumber(start.chunkSize) or FotoAPI.CHUNK, FotoAPI.CHUNK)
+	local offset = tonumber(start.received) or 0
+
+	local f, err = io.open(filePath, 'rb')
+	if not f then error('Kunne ikke lese fila: ' .. tostring(err), 0) end
+	local ok, problem = LrTasks.pcall(function()
+		local stuck = 0
+		while offset < size do
+			f:seek('set', offset)
+			local chunk = f:read(math.min(chunkSize, size - offset))
+			if type(chunk) ~= 'string' or #chunk == 0 then error('Kunne ikke lese fila (stopp ved byte ' .. offset .. ').', 0) end
+			local at = offset
+			local data, st = parse(self:request('PUT bit ' .. math.floor(at / chunkSize) + 1, { idempotent = true }, function()
+				return LrHttp.post(
+					self.base .. '/api/v1/uploads/' .. id .. '?offset=' .. at,
+					chunk,
+					self:headers({ { field = 'Content-Type', value = 'application/octet-stream' } }),
+					'PUT',
+					300
+				)
+			end))
+			local received = type(data) == 'table' and tonumber(data.received) or nil
+			if st == 409 and received then
+				-- Serveren er et annet sted (en bit kom fram, men svaret ble borte – eller noe er i gang): fortsett derfra.
+				if received == at then
+					stuck = stuck + 1
+					if stuck > 5 then ensure(data, st, 'Opplastingen feilet') end
+					LrTasks.sleep(2)
+				else
+					stuck = 0
+				end
+				offset = received
+			else
+				data = ensure(data, st, 'Opplastingen feilet')
+				offset = tonumber(data.received) or (at + #chunk)
+				stuck = 0
+			end
+			if onProgress then pcall(onProgress, offset / size) end
+		end
+	end)
+	f:close()
+	if not ok then error(problem, 0) end
+	-- Serveren lager stillbilde og miniatyrer før den svarer; for store videoer kan det ta litt tid.
+	local done, st = self:postJson('/api/v1/uploads/' .. id .. '/complete', {}, { idempotent = true, timeout = 600 })
+	if st == 404 and replaceId then return nil end
+	return ensure(done, st, 'Opplastingen feilet')
+end
+
 function FotoAPI:deletePhotos(ids)
 	local data, status = self:postJson('/api/v1/lr/delete-photos', { ids = JSON.array(ids) })
 	return ensure(data, status, 'Kunne ikke slette bilder på nettstedet')
@@ -325,39 +408,71 @@ function FotoAPI:link(serviceKey, links)
 end
 
 --- Laster ned originalen til filePath (via en midlertidig fil, så en avbrutt nedlasting aldri ligger igjen
---- som et halvt bilde). expectedBytes: størrelsen nettstedet oppgir, eller nil.
+--- som et halvt bilde). expectedBytes: størrelsen nettstedet oppgir, eller nil. Store filer (video) hentes i biter.
 function FotoAPI:download(photoId, filePath, expectedBytes)
 	local path = '/download/photo/' .. photoId
-	local headers = {
-		{ field = 'Authorization', value = 'Bearer ' .. self.token },
-		{ field = 'X-Foto-Plugin', value = FotoAPI.VERSION },
-	}
-	local body, h = self:request('GET ' .. path, { idempotent = true }, function()
-		return LrHttp.get(self.base .. path, headers, 300)
-	end)
-	if body == nil and type(h) == 'table' and h.error then parse(body, h) end -- kaster en lesbar feil
-	local status = type(h) == 'table' and tonumber(h.status) or 0
-	if status ~= 200 then
-		local data = nil
-		if body and body:sub(1, 1) == '{' then
-			local ok, decoded = pcall(JSON.decode, body)
-			if ok then data = decoded end
+	local total = tonumber(expectedBytes)
+	local function get(range)
+		local headers = {
+			{ field = 'Authorization', value = 'Bearer ' .. self.token },
+			{ field = 'X-Foto-Plugin', value = FotoAPI.VERSION },
+		}
+		if range then headers[#headers + 1] = { field = 'Range', value = range } end
+		local body, h = self:request('GET ' .. path .. (range and (' ' .. range) or ''), { idempotent = true }, function()
+			return LrHttp.get(self.base .. path, headers, 300)
+		end)
+		if body == nil and type(h) == 'table' and h.error then parse(body, h) end -- kaster en lesbar feil
+		local status = type(h) == 'table' and tonumber(h.status) or 0
+		if status ~= 200 and status ~= 206 then
+			local data = nil
+			if body and body:sub(1, 1) == '{' then
+				local ok, decoded = pcall(JSON.decode, body)
+				if ok then data = decoded end
+			end
+			ensure(data, status, 'Kunne ikke laste ned bildet')
 		end
-		ensure(data, status, 'Kunne ikke laste ned bildet')
+		if type(body) ~= 'string' or #body == 0 then error('Kunne ikke laste ned bildet: tomt svar.', 0) end
+		return body, status
 	end
-	if type(body) ~= 'string' or #body == 0 then error('Kunne ikke laste ned bildet: tomt svar.', 0) end
-	if expectedBytes and tonumber(expectedBytes) and #body ~= tonumber(expectedBytes) then
-		error('Kunne ikke laste ned bildet: fikk ' .. #body .. ' av ' .. tostring(expectedBytes) .. ' byte.', 0)
-	end
+
 	local part = filePath .. '.part'
 	local f, err = io.open(part, 'wb')
 	if not f then error('Kunne ikke lagre bildet: ' .. tostring(err), 0) end
-	f:write(body)
+	local written = 0
+	local ok, problem = LrTasks.pcall(function()
+		if total and total > FotoAPI.CHUNK then
+			while written < total do
+				local last = math.min(written + FotoAPI.CHUNK, total) - 1
+				local body, status = get('bytes=' .. written .. '-' .. last)
+				if status == 200 then
+					-- Serveren sendte hele fila likevel.
+					if written > 0 or #body ~= total then error('Kunne ikke laste ned bildet: uventet svar fra serveren.', 0) end
+					f:write(body)
+					written = #body
+				else
+					f:write(body)
+					written = written + #body
+				end
+			end
+		else
+			local body = get(nil)
+			f:write(body)
+			written = #body
+		end
+	end)
 	f:close()
+	if not ok then
+		LrFileUtils.delete(part)
+		error(problem, 0)
+	end
+	if total and written ~= total then
+		LrFileUtils.delete(part)
+		error('Kunne ikke laste ned bildet: fikk ' .. written .. ' av ' .. tostring(expectedBytes) .. ' byte.', 0)
+	end
 	if LrFileUtils.exists(filePath) then LrFileUtils.delete(filePath) end
 	local moved = LrFileUtils.move(part, filePath)
 	if moved == false then error('Kunne ikke lagre bildet i ' .. filePath, 0) end
-	return #body
+	return written
 end
 
 return FotoAPI

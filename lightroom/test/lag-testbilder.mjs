@@ -7,3 +7,8 @@ await sharp(svg(1200, 800, '#1d4e89', '#f2c14e', 'ROTERT')).jpeg({ quality: 80 }
 await sharp(svg(800, 1200, '#5b1a2c', '#ff6b5e', 'Lite')).jpeg({ quality: 80 })
   .withExifMerge({ IFD0: { Make: 'NIKON CORPORATION', Model: 'NIKON Z 8' }, IFD2: { DateTimeOriginal: '2026:10:07 14:30:05' } })
   .toFile(`${outDir}/lite-med-exif.jpg`);
+
+// En liten video (H.264 + AAC, 2 sekunder) – som Lightroom eksporterer den.
+import { execFileSync } from 'node:child_process';
+execFileSync('ffmpeg', ['-hide_banner', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=330',
+  '-t', '2', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', `${outDir}/klipp.mp4`]);

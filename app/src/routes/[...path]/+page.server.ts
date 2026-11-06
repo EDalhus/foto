@@ -3,6 +3,7 @@ import { favoriteIds, linkSendAllowed, markSubmitted, submission } from '$lib/se
 import { noticeMail, notifyAdmin } from '$lib/server/mail';
 import { getPhotosByIds, listPhotos } from '$lib/server/photos';
 import { canDownload, canFavorite, canView, isAdmin, pathOf, resolvePath, visibleChildren } from '$lib/server/tree';
+import { groupCards } from '$lib/server/categories';
 import { cardViews, crumbs, photoView } from '$lib/server/views';
 import type { SessionUser } from '$lib/server/auth';
 import type { Actions, PageServerLoad } from './$types';
@@ -39,7 +40,9 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 	};
 
 	if (node.type === 'folder') {
-		return { ...base, cards: cardViews(visibleChildren(node, locals.user), locals.user), photos: [], downloadAll: null, favorites: null };
+		const children = visibleChildren(node, locals.user);
+		const cards = cardViews(children, locals.user);
+		return { ...base, cards, grouping: groupCards(node, children, cards), photos: [], downloadAll: null, favorites: null };
 	}
 	const photos = listPhotos(node.id).map((p) => photoView(p, node, locals.user));
 	const taken = photos.map((p) => p.takenAt).filter((t): t is number => !!t);
@@ -55,6 +58,7 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 	return {
 		...base,
 		cards: [],
+		grouping: null,
 		photos,
 		range: taken.length ? { from: Math.min(...taken), to: Math.max(...taken) } : null,
 		downloadAll: canDownload(node, locals.user) && photos.length ? `/download/album/${node.id}` : null,

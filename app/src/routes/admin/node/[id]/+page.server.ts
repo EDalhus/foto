@@ -19,6 +19,9 @@ import { inviteLink, sendInvite } from '$lib/server/invite';
 import { mailConfigured } from '$lib/server/mail';
 import { nodeStats } from '$lib/server/stats';
 import { deleteNode, deletePhotos, listPhotos, movePhotos, sortByTaken } from '$lib/server/photos';
+import { retryVideo } from '$lib/server/worker';
+import { categoriesWithCounts, COLORS, listCategories, styleOf } from '$lib/server/categories';
+import { categoryActions } from '$lib/server/categoryActions';
 import { ancestors, createNode, folderOptions, getNode, getTree, HttpError, pathOf, updateNode, type TreeNode } from '$lib/server/tree';
 import { cardViews, coverView, imageView } from '$lib/server/views';
 import type { Actions, PageServerLoad } from './$types';
@@ -48,7 +51,11 @@ export const load: PageServerLoad = ({ params, locals }) => {
 					bytes: p.bytes,
 					stored: p.original_state === 'stored',
 					error: p.original_error,
-					takenAt: p.taken_at
+					takenAt: p.taken_at,
+					kind: p.kind,
+					duration: p.duration,
+					videoState: p.video_state,
+					videoError: p.video_error
 				}))
 			: [];
 	const cover = coverView(node, locals.user);
@@ -64,6 +71,7 @@ export const load: PageServerLoad = ({ params, locals }) => {
 			allowDownload: !!node.allow_download,
 			parentId: node.parent_id,
 			coverPhotoId: node.cover_photo_id,
+			categoryId: node.category_id,
 			fromLightroom: !!node.lr_ref,
 			path: pathOf(node),
 			photoCount: node.photoCount,
@@ -79,9 +87,15 @@ export const load: PageServerLoad = ({ params, locals }) => {
 			return {
 				...c,
 				mode: a?.mode ?? 'public',
-				clients: a?.shares.filter((s) => s.kind === 'client').map((s) => s.name) ?? []
+				clients: a?.shares.filter((s) => s.kind === 'client').map((s) => s.name) ?? [],
+				categoryId: node.children.find((n) => n.id === c.id)?.category_id ?? null
 			};
 		}),
+		// Kategoriene i mappa (for innholdet), og kategoriene der noden selv ligger (for «Om albumet»).
+		categories: node.type === 'folder' ? categoriesWithCounts(node.id) : [],
+		categoryStyle: node.type === 'folder' ? styleOf(node) : null,
+		parentCategories: listCategories(node.parent_id).map((c) => ({ id: c.id, name: c.name })),
+		colors: COLORS,
 		photos,
 		cover: cover
 			? {
@@ -124,6 +138,8 @@ const what = (n: TreeNode) => (n.type === 'album' ? 'Albumet' : 'Mappa');
 const str = (form: FormData, key: string) => String(form.get(key) ?? '');
 
 export const actions: Actions = {
+	...categoryActions((event) => event.params.id ?? null),
+
 	/** Navn, beskrivelse og plassering (og synlighet/nedlasting hvis de er med i skjemaet). */
 	save: ({ request, params }) =>
 		guard(async () => {
@@ -134,7 +150,12 @@ export const actions: Actions = {
 				description: form.has('description') ? str(form, 'description') : undefined,
 				parentId: form.has('parentId') ? str(form, 'parentId') || null : undefined,
 				visibility: form.has('visibility') ? (form.get('visibility') === 'private' ? 'private' : 'public') : undefined,
-				allowDownload: node.type === 'album' && form.has('allowDownloadField') ? form.get('allowDownload') === 'on' : undefined
+				allowDownload: node.type === 'album' && form.has('allowDownloadField') ? form.get('allowDownload') === 'on' : undefined,
+				// Flyttes noden samtidig, gjelder ikke kategorien (den hører til den gamle mappa).
+				categoryId:
+					form.has('categoryId') && (!form.has('parentId') || (str(form, 'parentId') || null) === node.parent_id)
+						? str(form, 'categoryId') || null
+						: undefined
 			});
 			return { saved: true, message: 'Lagret.' };
 		}),
@@ -374,6 +395,14 @@ export const actions: Actions = {
 			nodeOr404(params.id);
 			if (!unlockSubmission(str(form, 'user'), params.id)) throw new HttpError(400, 'Valget er ikke låst.');
 			return { message: 'Valget er låst opp. Gi beskjed til gjesten om at de kan endre det.' };
+		}),
+
+	/** Ny runde for en video som ikke ble klar for avspilling. */
+	retryVideo: ({ request }) =>
+		guard(async () => {
+			const form = await request.formData();
+			if (!retryVideo(str(form, 'photo'))) throw new HttpError(400, 'Videoen venter ikke på noe.');
+			return { message: 'Prøver igjen. Videoen er klar om litt.' };
 		}),
 
 	sortByDate: ({ params }) =>

@@ -2,6 +2,8 @@ import { all, one } from '$lib/server/db';
 import { pendingCount } from '$lib/server/photos';
 import { backupStatus, checkHealth, storeHealth } from '$lib/server/worker';
 import { config } from '$lib/server/config';
+import { ffmpegVersion } from '$lib/server/video';
+import { videoBusy } from '$lib/server/worker';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async () => {
@@ -17,7 +19,14 @@ export const load: PageServerLoad = async () => {
 		),
 		totals,
 		albums: one<{ n: number }>(`SELECT count(*) AS n FROM nodes WHERE type = 'album'`)?.n ?? 0,
-		backup: { ...backupStatus(), enabled: !!config.storage.backupBucket }
+		backup: { ...backupStatus(), enabled: !!config.storage.backupBucket },
+		video: {
+			ffmpeg: await ffmpegVersion(),
+			busy: !!videoBusy(),
+			pending: one<{ n: number }>(`SELECT count(*) AS n FROM photos WHERE video_state = 'pending'`)?.n ?? 0,
+			failed: one<{ n: number }>(`SELECT count(*) AS n FROM photos WHERE video_state = 'failed'`)?.n ?? 0,
+			total: one<{ n: number }>(`SELECT count(*) AS n FROM photos WHERE kind = 'video'`)?.n ?? 0
+		}
 	};
 };
 

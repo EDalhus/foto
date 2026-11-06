@@ -19,7 +19,8 @@ export const POST: RequestHandler = (event) =>
 			file,
 			title: optionalString(form, 'title'),
 			caption: optionalString(form, 'caption'),
-			keywords: keywordsFrom(form)
+			keywords: keywordsFrom(form),
+			takenAt: optionalString(form, 'takenAt')
 		});
-		return json({ id: photo.id, version: photo.version, url: `${event.url.origin}/i/${photo.id}` });
+		return json({ id: photo.id, version: photo.version, kind: photo.kind, url: `${event.url.origin}/i/${photo.id}` });
 	});

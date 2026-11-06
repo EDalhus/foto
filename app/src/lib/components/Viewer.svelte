@@ -14,7 +14,7 @@
 	import { onMount, tick } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
 	import type { PhotoView } from '$lib/types';
-	import { formatCamera, formatDateTime, formatExposure } from '$lib/format';
+	import { formatCamera, formatDateTime, formatDuration, formatExposure } from '$lib/format';
 	import { EASE_CLOSE, EASE_OPEN, FULL, loadedSrc, onScreen, reducedMotion, reveal, thumbFrame } from '$lib/zoom';
 	import Icon from './Icon.svelte';
 
@@ -61,7 +61,8 @@
 	let dialog = $state<HTMLDivElement>();
 	let frame = $state<HTMLDivElement>();
 	let backdrop = $state<HTMLDivElement>();
-	let img = $state<HTMLImageElement>();
+	/** Bildet – eller videoen – som vises (zoomes inn og ut, dras ned for å lukke). */
+	let img = $state<HTMLImageElement | HTMLVideoElement>();
 	let frameW = $state(0);
 	let frameH = $state(0);
 	let closing = $state(false);
@@ -78,6 +79,39 @@
 
 	// Miniatyren (allerede lastet) vises under det store bildet til det er lastet.
 	const placeholder = $derived.by(() => (photo ? loadedSrc(thumb?.(photo.id)) : null));
+
+	// --- Video ---
+	const isVideo = $derived(photo?.kind === 'video');
+	const playable = $derived(isVideo && !!photo?.video);
+	/** Stillbildet før avspilling: minste versjon som dekker flaten (poster kan ikke bruke srcset). */
+	const poster = $derived.by(() => {
+		if (!photo || !isVideo) return undefined;
+		const want = (box?.w ?? 1200) * (typeof devicePixelRatio === 'number' ? devicePixelRatio : 1);
+		const list = photo.srcset
+			.split(',')
+			.map((x) => x.trim().split(/\s+/))
+			.map(([url, w]) => ({ url, w: parseInt(w) || 0 }))
+			.sort((a, b) => a.w - b.w);
+		return (list.find((x) => x.w >= want) ?? list[list.length - 1])?.url ?? photo.src;
+	});
+	const videoEl = () => (img instanceof HTMLVideoElement ? img : null);
+
+	/** Start avspillingen. Nettleseren kan nekte lyd uten et trykk – da prøver vi uten lyd i lysbildefremvisning. */
+	function startVideo(muteIfNeeded = false) {
+		const v = videoEl();
+		if (!v) return;
+		v.play().catch(() => {
+			if (!muteIfNeeded) return;
+			v.muted = true;
+			v.play().catch(() => slideNext());
+		});
+	}
+	function toggleVideo() {
+		const v = videoEl();
+		if (!v) return;
+		if (v.paused) startVideo();
+		else v.pause();
+	}
 
 	function measure() {
 		if (!frame) return;
@@ -144,12 +178,13 @@
 		}
 		const id = photo.id;
 		const el = img;
+		if (el instanceof HTMLVideoElement) el.pause();
 		if (handoff) {
 			const r = el?.getBoundingClientRect();
 			onclose({
 				id,
 				rect: r ? { left: r.left, top: r.top, width: r.width, height: r.height } : null,
-				src: el?.currentSrc || null,
+				src: el instanceof HTMLVideoElement ? poster || null : el?.currentSrc || null,
 				color: photo.color
 			});
 			return;
@@ -201,19 +236,29 @@
 		} else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 	}
 
+	function slideNext() {
+		if (!playing || photos.length < 2) return;
+		navDir = 1;
+		onnavigate((photos[index + 1] ?? photos[0]).id);
+	}
+
 	// Neste bilde etter noen sekunder; starter på nytt fra begynnelsen etter det siste.
+	// En video spilles til den er ferdig (se onended) før fremvisningen går videre.
 	$effect(() => {
 		if (!playing || photos.length < 2) return;
 		void index;
-		const t = setTimeout(() => {
-			navDir = 1;
-			onnavigate((photos[index + 1] ?? photos[0]).id);
-		}, SLIDE_MS);
+		if (playable) {
+			tick().then(() => startVideo(true));
+			return;
+		}
+		const t = setTimeout(slideNext, SLIDE_MS);
 		return () => clearTimeout(t);
 	});
 
 	function onkeydown(e: KeyboardEvent) {
 		if (e.metaKey || e.ctrlKey || e.altKey || closing) return;
+		// Videoens egne knapper har fokus: la mellomrom styre dem.
+		if (e.key === ' ' && e.target instanceof HTMLVideoElement) return;
 		if (e.key === 'ArrowRight') go(1);
 		else if (e.key === 'ArrowLeft') go(-1);
 		else if (e.key === 'Escape') {
@@ -221,6 +266,7 @@
 			else if (showInfo && window.innerWidth < 900) showInfo = false;
 			else close();
 		} else if (e.key === 'i') showInfo = !showInfo;
+		else if (e.key === ' ' && playable && !playing) toggleVideo();
 		else if (e.key === ' ' || e.key === 'p') toggleSlideshow();
 		else if (e.key === 'f' && favorites && photo && !favoritesLocked) ontogglefavorite?.(photo.id);
 		else return;
@@ -247,6 +293,8 @@
 	function pointerdown(e: PointerEvent) {
 		lastPointer = e.pointerType;
 		if (e.pointerType === 'mouse' || zoomed || closing || !e.isPrimary) return;
+		// På videoen styrer fingeren avspillingen (spol, pause); sveip og dra gjøres utenfor.
+		if (e.target instanceof HTMLVideoElement) return;
 		drag = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, dy: 0, mode: '' };
 	}
 	function pointermove(e: PointerEvent) {
@@ -311,7 +359,11 @@
 		const vv = window.visualViewport;
 		const onZoom = () => (zoomed = !!vv && vv.scale > 1.01);
 		vv?.addEventListener('resize', onZoom);
-		tick().then(animateOpen);
+		tick().then(() => {
+			animateOpen();
+			// En video starter av seg selv når den er åpnet (blokkerer nettleseren lyd, trykker man på spill).
+			if (playable && !playing) setTimeout(() => startVideo(), reducedMotion() ? 0 : 340);
+		});
 		return () => {
 			ro.disconnect();
 			vv?.removeEventListener('resize', onZoom);
@@ -410,22 +462,54 @@
 		>
 			<div class="frame" bind:this={frame}>
 				{#key photo.id}
-					<img
-						bind:this={img}
-						in:enter
-						out:leave
-						src={photo.src}
-						srcset={photo.srcset}
-						sizes="100vw"
-						alt={photo.title || ''}
-						class:waiting={!box}
-						style:width={box ? `${box.w}px` : undefined}
-						style:height={box ? `${box.h}px` : undefined}
-						style:background-color={photo.color}
-						style:background-image={placeholder ? `url("${placeholder}")` : undefined}
-						draggable="false"
-					/>
+					{#if playable}
+						<!-- svelte-ignore a11y_media_has_caption -->
+						<video
+							bind:this={img}
+							in:enter
+							out:leave
+							src={photo.video}
+							poster={poster}
+							controls
+							playsinline
+							preload="metadata"
+							aria-label={photo.title || albumName || 'Video'}
+							class:waiting={!box}
+							style:width={box ? `${box.w}px` : undefined}
+							style:height={box ? `${box.h}px` : undefined}
+							style:background-color={photo.color}
+							style:background-image={placeholder ? `url("${placeholder}")` : undefined}
+							onended={slideNext}
+						></video>
+					{:else}
+						<img
+							bind:this={img}
+							in:enter
+							out:leave
+							src={photo.src}
+							srcset={photo.srcset}
+							sizes="100vw"
+							alt={photo.title || ''}
+							class:waiting={!box}
+							style:width={box ? `${box.w}px` : undefined}
+							style:height={box ? `${box.h}px` : undefined}
+							style:background-color={photo.color}
+							style:background-image={placeholder ? `url("${placeholder}")` : undefined}
+							draggable="false"
+						/>
+					{/if}
 				{/key}
+				{#if isVideo && !playable}
+					<div class="vstate chrome" role="status">
+						{#if photo.videoState === 'failed'}
+							<Icon name="info" size={18} />
+							<span>Videoen kan ikke spilles av her.{#if photo.download} Last ned originalen for å se den.{/if}</span>
+						{:else}
+							<span class="spin" aria-hidden="true"></span>
+							<span>Videoen gjøres klar for avspilling. Prøv igjen om et par minutter.</span>
+						{/if}
+					</div>
+				{/if}
 			</div>
 			{#if index > 0}
 				<button class="nav prev chrome" onclick={() => go(-1)} aria-label="Forrige bilde"><Icon name="left" size={28} /></button>
@@ -435,7 +519,7 @@
 			{/if}
 		</div>
 
-		{#if playing}
+		{#if playing && !playable}
 			{#key photo.id}<div class="progress" style:animation-duration="{SLIDE_MS}ms"></div>{/key}
 		{/if}
 
@@ -468,13 +552,17 @@
 						<dt>Innstillinger</dt>
 						<dd>{exposure}</dd>
 					{/if}
+					{#if isVideo}
+						<dt>Lengde</dt>
+						<dd>{formatDuration(photo.duration)}</dd>
+					{/if}
 					<dt>Størrelse</dt>
 					<dd>{photo.w} × {photo.h} px</dd>
 					<dt>Fil</dt>
 					<dd class="file">{photo.filename}</dd>
 				</dl>
 				{#if photo.download}
-					<a class="btn primary" href={photo.download} download><Icon name="download" /> Last ned original</a>
+					<a class="btn primary" href={photo.download} download><Icon name="download" /> {isVideo ? 'Last ned videoen' : 'Last ned original'}</a>
 				{/if}
 			</aside>
 		{/if}
@@ -621,8 +709,47 @@
 		-webkit-user-select: none;
 		will-change: transform;
 	}
-	.frame img.waiting {
+	.frame img.waiting,
+	.frame video.waiting {
 		visibility: hidden;
+	}
+	.frame video {
+		grid-area: 1 / 1;
+		max-width: none;
+		background-size: 100% 100%;
+		object-fit: contain;
+		will-change: transform;
+		outline: none;
+	}
+	.vstate {
+		grid-area: 1 / 1;
+		align-self: end;
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		max-width: min(92%, 460px);
+		margin-bottom: 18px;
+		padding: 10px 14px;
+		border-radius: 12px;
+		background: rgba(12, 12, 13, 0.78);
+		backdrop-filter: blur(10px);
+		-webkit-backdrop-filter: blur(10px);
+		font-size: 14px;
+		color: var(--text);
+	}
+	.spin {
+		flex: none;
+		width: 16px;
+		height: 16px;
+		border-radius: 999px;
+		border: 2px solid rgba(255, 255, 255, 0.25);
+		border-top-color: #fff;
+		animation: spin 0.9s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 	.nav {
 		position: absolute;

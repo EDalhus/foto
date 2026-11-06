@@ -12,9 +12,28 @@ _PLUGIN = { id = 'net.dalhus.foto', path = PLUGIN }
 io.open = function(path, mode)
 	mode = mode or 'r'
 	if mode:sub(1, 1) == 'r' then
-		local content = __read(path)
-		if content == nil then return nil, 'finnes ikke' end
-		return { seek = function() return #content end, read = function() return content end, close = function() end }
+		local size = __size(path)
+		if size < 0 then return nil, 'finnes ikke' end
+		local pos = 0
+		local f = {}
+		function f:seek(whence, off)
+			whence, off = whence or 'cur', off or 0
+			if whence == 'set' then pos = off elseif whence == 'end' then pos = size + off else pos = pos + off end
+			return pos
+		end
+		function f:read(n)
+			if type(n) ~= 'number' then
+				local s = __readRange(path, pos, size - pos)
+				pos = size
+				return s
+			end
+			if pos >= size then return nil end
+			local s = __readRange(path, pos, n)
+			pos = pos + #s
+			return s
+		end
+		function f:close() end
+		return f
 	end
 	if mode:sub(1, 1) == 'w' then __rm(path) end
 	return { write = function(self, s) __append(path, s) return self end, close = function() end }
@@ -86,6 +105,28 @@ modules.LrHttp = {
 	end,
 }
 modules.LrSystemInfo = { computerName = function() return 'Test-Mac' end }
+local H264 = '4e49434b-4832-3634-fbfb-fbfbfbfbfbfb'
+local function videoPreset(format, name, id)
+	return { formatID = function() return format end, name = function() return name end, _id = id }
+end
+videoPresets = {
+	videoPreset('4e49434b-4450-5820-fbfb-fbfbfbfbfbfb', 'Original', 'dpx'),
+	videoPreset(H264, 'Høy', 'h264-high'),
+	videoPreset(H264, 'Maks', 'h264-max'),
+	videoPreset(H264, 'Lav', 'h264-low'),
+}
+modules.LrExportSettings = {
+	videoExportPresets = function()
+		if videoPresetsFail then error('ikke tilgjengelig') end
+		local out = {}
+		for _, p in pairs(videoPresets) do out[#out + 1] = p end
+		return out
+	end,
+	applyVideoExportPreset = function(s, preset)
+		s.LR_export_videoFormat = preset.formatID()
+		s.LR_export_videoPreset = preset._id
+	end,
+}
 modules.LrTasks = {
 	pcall = function(f, ...)
 		if not inTask then violation('LrTasks.pcall utenfor oppgave') end
@@ -572,9 +613,11 @@ local function publish(collection, photos)
 		local path = TMP .. '/render-' .. i .. '-' .. p.file
 		__copy(IMG .. '/' .. p.file, path)
 		renditions[i] = {
-			photo = photo(p.lrId or i, p.meta),
+			photo = photo(p.lrId or i, p.meta, p.video and { isVideo = true, dateTimeOriginalISO8601 = p.taken } or nil),
 			publishedPhotoId = p.publishedId,
-			waitForRender = function() return true, path end,
+			destinationPath = path,
+			-- p.bug: Lightroom-feilen der waitForRender svarer «false, nil» for video som er eksportert.
+			waitForRender = function() if p.bug then return false, nil end return true, path end,
 			recordPublishedPhotoId = function(_, id) p.newId = id end,
 			recordPublishedPhotoUrl = function(_, url) p.url = url end,
 			uploadFailed = function(_, msg) p.failed = msg end,
@@ -832,6 +875,64 @@ local s = JSON.encode({ a = 'æøå "sitat" \n ny linje', b = { 1, 2, 3 }, c = t
 local back = JSON.decode(s)
 check(back.a == 'æøå "sitat" \n ny linje' and back.b[3] == 3 and back.c == true and back.d == 1.5, 'tur-retur')
 
+print('19b. Video')
+check(provider.canExportVideo == true, 'tjenesten kan eksportere video')
+local hidesVideo = false
+for _, n in ipairs(provider.hideSections) do if n == 'video' then hidesVideo = true end end
+check(hidesVideo, 'videoinnstillingene i Lightroom er skjult (pluginen bestemmer)')
+local es = {}
+blocking(provider.updateExportSettings, es)
+check(es.LR_includeVideoFiles == true and es.LR_export_videoFileHandling == 'include', 'videoer tas alltid med')
+check(es.LR_export_videoFormat == H264 and es.LR_export_videoPreset == 'h264-max', 'H.264 i beste kvalitet («Maks»)')
+videoPresetsFail = true
+local es2 = { LR_export_videoFormat = 'original' }
+blocking(provider.updateExportSettings, es2)
+videoPresetsFail = false
+check(es2.LR_export_videoFormat == H264 and es2.LR_export_videoPreset == 'original', 'uten SDK-et: H.264 med verdiene Lightroom selv lagrer')
+
+local colFilm = mkObj('LrPublishedCollection', 'Film', nil, foto, { _settings = { visibility = 'public', allowDownload = true } })
+FotoAPI.CHUNK = 96 * 1024
+local logBefore = #httpLog
+local vids = { { file = 'klipp.mp4', lrId = 70, video = true, taken = '2026-09-14T10:22:31', meta = { title = 'Til kai', caption = 'Ankomst' } } }
+check(publish(colFilm, vids), 'eksportfila er slettet etterpå')
+check(vids[1].newId and not vids[1].failed, 'videoen er lastet opp' .. (vids[1].failed and (': ' .. vids[1].failed) or ''))
+local vrow = vids[1].newId and one("SELECT * FROM photos WHERE id = '" .. vids[1].newId .. "'") or {}
+check(vrow.kind == 'video' and vrow.mime == 'video/mp4' and vrow.title == 'Til kai' and vrow.caption == 'Ankomst', 'lagret som video, med tittel og bildetekst')
+check(vrow.taken_at == 1789381351000, 'opptakstiden fra Lightroom er med (' .. tostring(vrow.taken_at) .. ')')
+check(vrow.sha256 == __sha256(IMG .. '/klipp.mp4'), 'fila kom fram uendret')
+local puts = 0
+for i = logBefore + 1, #httpLog do if httpLog[i]:find('^PUT /api/v1/uploads/') then puts = puts + 1 end end
+check(puts >= 3, 'sendt i biter (' .. puts .. ' biter)')
+
+local buggy = { { file = 'klipp.mp4', lrId = 71, video = true, bug = true } }
+publish(colFilm, buggy)
+check(buggy[1].newId and not buggy[1].failed, 'Lightroom-feilen («false, nil» for video) går fint')
+
+local again = { { file = 'klipp.mp4', lrId = 70, video = true, publishedId = vids[1].newId } }
+publish(colFilm, again)
+check(again[1].newId == vids[1].newId and one("SELECT version FROM photos WHERE id = '" .. vids[1].newId .. "'").version == 2, 'ny versjon av videoen: samme ID, versjon 2')
+local goneVideo = { { file = 'klipp.mp4', lrId = 72, video = true, publishedId = 'finnesikkevideo' } }
+publish(colFilm, goneVideo)
+check(goneVideo[1].newId and goneVideo[1].newId ~= 'finnesikkevideo', 'video som er slettet på nettstedet, lastes opp som ny')
+
+httpFaults[#httpFaults + 1] = { pattern = 'PUT /api/v1/uploads/', errorCode = 'timedOut' }
+httpFaults[#httpFaults + 1] = { pattern = '/complete', status = 503 }
+local flaky = { { file = 'klipp.mp4', lrId = 73, video = true } }
+publish(colFilm, flaky)
+check(flaky[1].newId and not flaky[1].failed and #httpFaults == 0, 'en bit som feiler og en server som starter på nytt: prøves igjen')
+check(one("SELECT count(*) AS n FROM photos WHERE album_id = (SELECT album_id FROM photos WHERE id = '" .. flaky[1].newId .. "')").n == 4, 'ingen dobbel video i albumet')
+
+-- Store filer lastes også ned i biter (Synkroniser med Foto).
+local apiV = FotoAPI.new(settings)
+local target = TMP .. '/nedlastet-klipp.mp4'
+local bytes = one("SELECT bytes FROM photos WHERE id = '" .. vids[1].newId .. "'").bytes
+logBefore = #httpLog
+local got = task(function() return apiV:download(vids[1].newId, target, bytes) end)
+local gets = 0
+for i = logBefore + 1, #httpLog do if httpLog[i]:find('GET /download/photo/', 1, true) then gets = gets + 1 end end
+check(got == bytes and __size(target) == bytes and __sha256(target) == __sha256(IMG .. '/klipp.mp4') and gets >= 3, 'stor fil lastet ned i ' .. gets .. ' biter, uendret')
+FotoAPI.CHUNK = 32 * 1024 * 1024
+
 print('20. Synkroniser med Foto')
 ;(function()
 local Sync = require 'FotoSync'
@@ -949,7 +1050,7 @@ catalogPhoto(303, { path = '/Bilder/2025/match.NEF', dateTimeOriginalISO8601 = '
 local pUtenDato = catalogPhoto(304, { path = '/Bilder/uten-dato.jpg', isVirtualCopy = false })
 
 -- Nettstedet: ny mappe med album og bilder, nytt album på toppnivå, «Tvilling», og endringer på «Egen».
-local gc = webCreate('folder', 'GC Rieber Minerals', nil, 'private')
+local gc = webCreate('folder', 'Kaikanten Terminal', nil, 'private')
 local bef = webCreate('album', 'Befaring', gc.id, 'public')
 local idMatch = webUpload(bef.id, 'lite-med-exif.jpg', 'match.jpg')
 local idBare = webUpload(bef.id, 'rotert-orientation6.jpg', 'bare-paa-nett.jpg')
@@ -1006,11 +1107,11 @@ check(textHas('Last ned og importer 3 bilder som bare finnes på nettstedet'), '
 check(textHas('Fjern fra Lightroom det som er slettet på nettstedet (1 bilde)'), 'oversikt: 1 bilde slettet på nettstedet')
 check(textHas(otherCount .. ' mapper og album hører til en annen Lightroom-katalog'), 'oversikt: ' .. otherCount .. ' hører til en annen katalog')
 
-local gcSet = childNamed2(foto2, 'GC Rieber Minerals', 'LrPublishedCollectionSet')
+local gcSet = childNamed2(foto2, 'Kaikanten Terminal', 'LrPublishedCollectionSet')
 local befCol = gcSet and childNamed2(gcSet, 'Befaring', 'LrPublishedCollection')
 local webCol = childNamed2(foto2, 'Webalbum', 'LrPublishedCollection')
 check(gcSet and gcSet._settings.visibility == 'private' and gcSet._remoteId == gc.id and tostring(gcSet._remoteUrl):find('/a/' .. gc.id, 1, true),
-	'Lightroom: mappa «GC Rieber Minerals» (privat, koblet til nettstedet)')
+	'Lightroom: mappa «Kaikanten Terminal» (privat, koblet til nettstedet)')
 check(befCol and befCol._remoteId == bef.id and befCol._settings.visibility == 'public', 'Lightroom: albumet «Befaring» i mappa')
 check(webCol and webCol._settings.allowDownload == true and webCol._remoteId == web.id, 'Lightroom: «Webalbum» med nedlasting på')
 local refOf = function(id) return one("SELECT lr_ref FROM nodes WHERE id = '" .. id .. "'").lr_ref end
@@ -1025,7 +1126,7 @@ check(n2 == 1, 'bare ett «Tvilling» i Lightroom')
 local bp = befCol and publishedAs(befCol) or {}
 check(bp[idMatch] == pMatch, '«match.jpg» koblet til originalen i katalogen (ikke den virtuelle kopien eller fjorårets)')
 check(bp[idUtenDato] == pUtenDato, '«uten-dato.jpg» koblet til bildet med samme filnavn')
-local barePath = TMP .. '/synk/GC Rieber Minerals/Befaring/bare-paa-nett.jpg'
+local barePath = TMP .. '/synk/Kaikanten Terminal/Befaring/bare-paa-nett.jpg'
 check(bp[idBare] and bp[idBare]._raw.path == barePath, '«bare-paa-nett.jpg» lastet ned og importert til ' .. barePath)
 check(__size(barePath) == __size(IMG .. '/rotert-orientation6.jpg') and not __exists(barePath .. '.part'), 'nedlastet fil er hel (samme størrelse som originalen)')
 check(befCol and befCol._photos[1] == pMatch and befCol._photos[2] == bp[idBare] and befCol._photos[3] == pUtenDato, 'samme rekkefølge som på nettstedet')
@@ -1034,7 +1135,7 @@ check(wp[idNett2] and wp[idNett2]._raw.path == TMP .. '/synk/Webalbum/nett2.jpg'
 local ep = publishedAs(colEgen)
 check(colEgen._name == 'Egen (nytt navn)' and colEgen._parent == gcSet and colEgen._settings.visibility == 'private', '«Egen» fikk nytt navn, ble flyttet og privat i Lightroom')
 check(ep[pe[1].newId] and not ep[pe[2].newId], 'bildet som ble slettet på nettstedet, er fjernet fra «Egen»')
-check(ep[idEkstra] and ep[idEkstra]._raw.path == TMP .. '/synk/GC Rieber Minerals/Egen (nytt navn)/ekstra.jpg', '«ekstra.jpg» lastet ned til «Egen»')
+check(ep[idEkstra] and ep[idEkstra]._raw.path == TMP .. '/synk/Kaikanten Terminal/Egen (nytt navn)/ekstra.jpg', '«ekstra.jpg» lastet ned til «Egen»')
 check(#importedPaths == 3, '3 bilder importert i katalogen (' .. #importedPaths .. ')')
 check(__sql("SELECT id, lr_ref FROM nodes WHERE lr_ref LIKE 'lr:" .. settings.serviceKey .. ":%' ORDER BY id") == otherRefsBefore, 'den andre katalogens album er urørt')
 check(done1 and done1.msg == 'Synkronisert med Foto' and done1.info:find('Laget i Lightroom: 1 ny mappe og 2 nye album.', 1, true)
@@ -1046,7 +1147,7 @@ check(prefs.syncFolder == TMP .. '/synk', 'mappa for nedlastinger huskes')
 local pb = { { file = 'lite-med-exif.jpg', lrId = 210 } }
 publishTo(foto2, settings2, befCol, pb)
 check(pb[1].newId and one("SELECT album_id FROM photos WHERE id = '" .. pb[1].newId .. "'").album_id == bef.id, 'publisert fra Lightroom til «Befaring» på nettstedet')
-check(one("SELECT count(*) AS n FROM nodes WHERE name = 'Befaring'").n == 1 and one("SELECT count(*) AS n FROM nodes WHERE name = 'GC Rieber Minerals'").n == 1, 'ingen nye kopier av mappa eller albumet')
+check(one("SELECT count(*) AS n FROM nodes WHERE name = 'Befaring'").n == 1 and one("SELECT count(*) AS n FROM nodes WHERE name = 'Kaikanten Terminal'").n == 1, 'ingen nye kopier av mappa eller albumet')
 
 -- Slettet album på nettstedet, og en kobling som ikke kommer fram (lagres ved neste publisering).
 __browser('POST', SERVER .. '/admin/node/' .. web.id .. '?/delete', true, '')

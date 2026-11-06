@@ -13,7 +13,8 @@ const pushStr = (s) => lua.lua_pushstring(L, to_luastring(String(s)));
 function reg(name, fn) { lua.lua_pushjsfunction(L, fn); lua.lua_setglobal(L, to_luastring(name)); }
 reg('__http', (L) => {
   const method = str(1), url = str(2), headers = str(3).split('\n').filter(Boolean);
-  const body = lua.lua_isnil(L, 4) ? null : str(4);
+  // Kroppen som rå byte (biter av videoer skal komme fram uendret).
+  const body = lua.lua_isnil(L, 4) ? null : Buffer.from(lua.lua_tolstring(L, 4));
   const form = lua.lua_isnil(L, 5) ? null : JSON.parse(str(5));
   const args = ['-s', '-X', method, '-w', '\n%{http_code}', '--max-time', '60'];
   for (const h of headers) args.push('-H', h);
@@ -63,6 +64,12 @@ reg('__browser', (L) => {
   const i = out.lastIndexOf('\n');
   lua.lua_pushinteger(L, Number(out.slice(i + 1))); pushStr(out.slice(0, i)); return 2;
 });
+reg('__readRange', (L) => {
+  const p = str(1), off = Number(lua.lua_tointeger(L, 2)), n = Number(lua.lua_tointeger(L, 3));
+  const fd = fs.openSync(p, 'r'); const buf = Buffer.alloc(Math.max(0, n)); const got = fs.readSync(fd, buf, 0, buf.length, off); fs.closeSync(fd);
+  lua.lua_pushlstring(L, Uint8Array.from(buf.subarray(0, got)), got); return 1;
+});
+reg('__sha256', (L) => { pushStr(crypto.createHash('sha256').update(fs.readFileSync(str(1))).digest('hex')); return 1; });
 reg('__exists', (L) => { lua.lua_pushboolean(L, fs.existsSync(str(1))); return 1; });
 reg('__append', (L) => { fs.appendFileSync(str(1), Buffer.from(lua.lua_tolstring(L, 2))); return 0; });
 reg('__mkdir', (L) => { fs.mkdirSync(str(1), { recursive: true }); return 0; });

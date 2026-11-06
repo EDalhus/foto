@@ -26,6 +26,10 @@ export interface NodeRow {
 	lr_ref: string | null;
 	created_at: number;
 	updated_at: number;
+	/** Kategorien i mappa noden ligger i (f.eks. rederiet). */
+	category_id: string | null;
+	/** Mappe: hvordan kategoriene vises (null = overskrifter, 'none' = av). */
+	category_style: string | null;
 }
 
 export interface TreeNode extends NodeRow {
@@ -421,6 +425,8 @@ export interface UpdateNodeInput {
 	coverPhotoId?: string | null;
 	/** «Velg N bilder» (null = fritt). */
 	pickCount?: number | null;
+	/** Kategori i mappa noden ligger i (null = ingen). */
+	categoryId?: string | null;
 }
 
 export function updateNode(id: string, patch: UpdateNodeInput): void {
@@ -462,8 +468,16 @@ export function updateNode(id: string, patch: UpdateNodeInput): void {
 			pick = patch.pickCount;
 			if (pick !== null && (!Number.isInteger(pick) || pick < 1 || pick > 10000)) throw new HttpError(400, 'Antallet må være et helt tall fra 1 og oppover.');
 		}
+		// Kategoriene hører til mappa: flyttes noden, mister den kategorien.
+		let category = row.category_id;
+		if (patch.categoryId !== undefined) {
+			category = patch.categoryId || null;
+			if (category && !one(`SELECT 1 FROM categories WHERE id = ? AND ifnull(parent_id, '') = ?`, category, parentId ?? '')) {
+				throw new HttpError(400, 'Kategorien hører ikke til mappa albumet ligger i.');
+			}
+		} else if (parentId !== row.parent_id) category = null;
 		run(
-			`UPDATE nodes SET parent_id = ?, name = ?, slug = ?, description = ?, visibility = ?, allow_download = ?, cover_photo_id = ?, pick_count = ?, updated_at = ? WHERE id = ?`,
+			`UPDATE nodes SET parent_id = ?, name = ?, slug = ?, description = ?, visibility = ?, allow_download = ?, cover_photo_id = ?, pick_count = ?, category_id = ?, updated_at = ? WHERE id = ?`,
 			parentId,
 			name,
 			slug,
@@ -472,6 +486,7 @@ export function updateNode(id: string, patch: UpdateNodeInput): void {
 			patch.allowDownload !== undefined ? (patch.allowDownload ? 1 : 0) : row.allow_download,
 			cover,
 			pick,
+			category,
 			now(),
 			id
 		);

@@ -78,3 +78,19 @@ export function formatExposure(exif: PhotoView['exif']) {
 		.filter(Boolean)
 		.join(' · ');
 }
+
+/** Lengden på en video: «0:42», «12:05», «1:02:03». */
+export function formatDuration(seconds: number | null | undefined) {
+	const t = Math.max(0, Math.round(seconds ?? 0));
+	const hh = Math.floor(t / 3600);
+	const mm = Math.floor((t % 3600) / 60);
+	const ss = String(t % 60).padStart(2, '0');
+	return hh ? `${hh}:${String(mm).padStart(2, '0')}:${ss}` : `${mm}:${ss}`;
+}
+
+/** «8 bilder», «6 bilder og 2 videoer», «1 video». */
+export function mediaCount(photos: number, videos: number) {
+	if (!videos) return plural(photos, 'bilde', 'bilder');
+	if (!photos) return plural(videos, 'video', 'videoer');
+	return `${plural(photos, 'bilde', 'bilder')} og ${plural(videos, 'video', 'videoer')}`;
+}

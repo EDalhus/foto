@@ -171,11 +171,15 @@ class S3Store implements Store {
 	}
 
 	async put(key: string, filePath: string, contentType: string) {
-		const body = await fsp.readFile(filePath);
+		// Strømmes rett fra disk: en video på flere GB skal ikke ligge i minnet (beholderen har 2 GB).
+		// aws4fetch signerer S3-kall med UNSIGNED-PAYLOAD, så kroppen trenger ikke leses på forhånd.
+		const { size } = await fsp.stat(filePath);
+		const body = Readable.toWeb(fs.createReadStream(filePath)) as ReadableStream<Uint8Array>;
 		const res = await this.send(
 			this.url(key),
-			{ method: 'PUT', body, headers: { 'content-type': contentType } },
-			10 * 60_000
+			{ method: 'PUT', body, duplex: 'half', headers: { 'content-type': contentType, 'content-length': String(size) } } as RequestInit,
+			// Tiden fram til svaret kommer, gjelder hele opplastingen: minst 10 minutter, mer for store filer.
+			Math.max(10 * 60_000, (size / (2 * 1024 * 1024)) * 1000)
 		);
 		if (!res.ok) throw new Error(`S3 PUT ${key}: ${res.status} ${(await res.text()).slice(0, 300)}`);
 		await res.arrayBuffer().catch(() => {});

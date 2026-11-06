@@ -73,6 +73,21 @@ export async function processImage(src: string, outDir: string): Promise<Process
 	if (!kind) throw new UnsupportedImageError(`Formatet «${format}» støttes ikke. Bruk JPEG, PNG, WebP, TIFF eller AVIF.`);
 	if (!meta.width || !meta.height) throw new UnsupportedImageError('Bildet mangler dimensjoner.');
 
+	const { width, height, sizes, color } = await derive(src, outDir, meta);
+
+	const { exif, embedded } = await readMetadata(src);
+	return { mime: kind.mime, ext: kind.ext, width, height, sizes, color, exif, embedded };
+}
+
+export interface Derived {
+	width: number;
+	height: number;
+	sizes: SizeInfo[];
+	color: string | null;
+}
+
+/** Webversjonene (s/m/l/x.webp og og.jpg) og hovedfargen, laget fra et bilde som sharp kan lese. */
+async function derive(src: string, outDir: string, meta: sharp.Metadata): Promise<Derived> {
 	const rotated = (meta.orientation ?? 1) >= 5;
 	const width = rotated ? meta.height : meta.width;
 	const height = rotated ? meta.width : meta.height;
@@ -122,8 +137,14 @@ export async function processImage(src: string, outDir: string): Promise<Process
 		// ikke viktig
 	}
 
-	const { exif, embedded } = await readMetadata(src);
-	return { mime: kind.mime, ext: kind.ext, width, height, sizes, color, exif, embedded };
+	return { width, height, sizes, color };
+}
+
+/** Webversjoner fra et stillbilde av en video (PNG fra ffmpeg). */
+export async function processFrame(src: string, outDir: string): Promise<Derived> {
+	const meta = await sharp(src, INPUT).metadata();
+	if (!meta.width || !meta.height) throw new UnsupportedImageError('Fant ikke noe stillbilde i videoen.');
+	return derive(src, outDir, meta);
 }
 
 // ---------------------------------------------------------------------------

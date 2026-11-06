@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDuration } from '$lib/format';
 	import type { PhotoView } from '$lib/types';
 	import Icon from './Icon.svelte';
 
@@ -30,7 +31,12 @@
 		{@const fav = !!favorites?.has(p.id)}
 		<div class="item" data-photo={p.id} style:flex-grow={ar} style:flex-basis="calc({ar} * var(--row))" style:background-color={p.color}>
 			<i style:padding-bottom="{(100 / ar).toFixed(4)}%"></i>
-			<a href="/i/{p.id}" class="hit" onclick={(e) => onopen(p.id, e)} aria-label={p.title || `Bilde ${i + 1}`}>
+			<a
+				href="/i/{p.id}"
+				class="hit"
+				onclick={(e) => onopen(p.id, e)}
+				aria-label={p.kind === 'video' ? `${p.title || `Video ${i + 1}`}, video ${formatDuration(p.duration)}` : p.title || `Bilde ${i + 1}`}
+			>
 				<img
 					src={p.src}
 					srcset={p.srcset}
@@ -41,6 +47,9 @@
 					loading={i < 12 ? 'eager' : 'lazy'}
 					decoding="async"
 				/>
+				{#if p.kind === 'video'}
+					<span class="vbadge" aria-hidden="true"><Icon name="play" size={12} filled />{formatDuration(p.duration)}</span>
+				{/if}
 			</a>
 			{#if favorites && favoritesLocked}
 				{#if fav}<span class="fav on locked" title="Valgt" aria-label="Valgt"><Icon name="heart" size={20} filled /></span>{/if}
@@ -129,6 +138,29 @@
 	}
 	.item:hover img {
 		opacity: 0.88;
+	}
+	/* Video: spill-merke og lengde nederst til venstre (hjertet står til høyre). */
+	.vbadge {
+		position: absolute;
+		left: 6px;
+		bottom: 6px;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 8px 3px 6px;
+		border-radius: 999px;
+		background: rgba(10, 10, 12, 0.62);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		color: #fff;
+		font-size: 12px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		line-height: 1;
+		pointer-events: none;
+	}
+	.vbadge :global(svg) {
+		stroke-width: 0;
 	}
 	@media (max-width: 1100px) {
 		.jg {

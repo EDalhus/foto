@@ -3,21 +3,58 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { derivedDir, getPhoto } from '$lib/server/photos';
-import { canView } from '$lib/server/tree';
+import { byteRange } from '$lib/server/http';
+import { derivedDir, getPhoto, type Photo } from '$lib/server/photos';
+import { canView, type TreeNode } from '$lib/server/tree';
 import { albumOf } from '$lib/server/views';
 import { ensureWatermarked, getWatermark, WATERMARKED, watermarkFor, wmName } from '$lib/server/watermark';
 import type { RequestHandler } from './$types';
 
 const FILE = /^(?:wm(\d+)-)?([smlx]\.webp|og\.jpg)$/;
 
+/** Avspillingsversjonen av en video. Nettlesere (særlig Safari) krever at Range virker. */
+async function serveVideo(photo: Photo, album: TreeNode, request: Request): Promise<Response> {
+	if (photo.kind !== 'video' || photo.video_state !== 'ready') error(404);
+	const file = path.join(derivedDir(photo.id, photo.version), 'video.mp4');
+	const stat = await fsp.stat(file).catch(() => null);
+	if (!stat) error(404);
+	const etag = `"${photo.id}-${photo.version}-video"`;
+	const headers: Record<string, string> = {
+		'content-type': 'video/mp4',
+		'accept-ranges': 'bytes',
+		'cache-control': album.effectivePrivate ? 'private, max-age=86400' : 'public, max-age=31536000, immutable',
+		etag
+	};
+	if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
+	const range = byteRange(request.headers.get('range'), stat.size);
+	if (range === 'invalid') {
+		return new Response(null, { status: 416, headers: { ...headers, 'content-range': `bytes */${stat.size}` } });
+	}
+	const { start, end } = range ?? { start: 0, end: stat.size - 1 };
+	headers['content-length'] = String(end - start + 1);
+	if (range) headers['content-range'] = `bytes ${start}-${end}/${stat.size}`;
+	return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })) as ReadableStream, {
+		status: range ? 206 : 200,
+		headers
+	});
+}
+
 /** Webversjoner. Tilgangen sjekkes på hvert kall, så bilder i private album er beskyttet også med direkte lenke. */
 export const GET: RequestHandler = async ({ params, locals, request }) => {
-	const m = FILE.exec(params.file);
-	if (!m) error(404);
 	const photo = getPhoto(params.id);
 	const album = photo ? albumOf(photo) : null;
 	if (!photo || !album || !canView(album, locals.user)) error(404);
+	if (params.file === 'video.mp4') {
+		if (String(photo.version) !== params.version) {
+			return new Response(null, {
+				status: 302,
+				headers: { location: `/media/${photo.id}/${photo.version}/video.mp4`, 'cache-control': 'private, no-store' }
+			});
+		}
+		return serveVideo(photo, album, request);
+	}
+	const m = FILE.exec(params.file);
+	if (!m) error(404);
 
 	// Vannmerke: den som skal ha vannmerke, får det uansett hvilken URL som brukes.
 	const base = m[2];

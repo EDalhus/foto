@@ -4,15 +4,17 @@
 	import { page } from '$app/state';
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import CardGrid from '$lib/components/CardGrid.svelte';
+	import CategoryCards from '$lib/components/CategoryCards.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Gallery from '$lib/components/Gallery.svelte';
-	import { formatDate, formatLocal, plural } from '$lib/format';
+	import { formatDate, formatLocal, mediaCount, plural } from '$lib/format';
 	import { submit } from '$lib/submit';
 	import { toast } from '$lib/toasts.svelte';
 
 	let { data } = $props();
 
 	const node = $derived(data.node);
+	const videoCount = $derived(data.photos.filter((p) => p.kind === 'video').length);
 
 	// Statistikk: én melding når mappa/albumet faktisk vises (serveren teller samme besøkende én gang per halvtime).
 	$effect(() => {
@@ -173,7 +175,7 @@
 		<h1>{node.name}</h1>
 		<div class="meta">
 			{#if node.type === 'album'}
-				<span>{plural(node.photoCount, 'bilde', 'bilder')}</span>
+				<span>{mediaCount(data.photos.length - videoCount, videoCount)}</span>
 				{#if dateText}<span class="dot">·</span><span>{dateText}</span>{/if}
 			{:else}
 				<span>{plural(node.albumCount, 'album', 'album')}</span>
@@ -271,7 +273,9 @@
 	</header>
 
 	{#if node.type === 'folder'}
-		{#if data.cards.length}
+		{#if data.grouping}
+			<CategoryCards grouping={data.grouping} />
+		{:else if data.cards.length}
 			<CardGrid cards={data.cards} />
 		{:else}
 			<p class="muted">Mappa er tom.</p>

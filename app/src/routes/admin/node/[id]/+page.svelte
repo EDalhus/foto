@@ -5,10 +5,11 @@
 	import AccessPanel from '$lib/components/AccessPanel.svelte';
 	import BarChart from '$lib/components/BarChart.svelte';
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
+	import CategoryPanel from '$lib/components/CategoryPanel.svelte';
 	import CoverPicker from '$lib/components/CoverPicker.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Uploader from '$lib/components/Uploader.svelte';
-	import { formatBytes, formatDate, formatLocal, plural } from '$lib/format';
+	import { formatBytes, formatDate, formatDuration, formatLocal, mediaCount, plural } from '$lib/format';
 	import { submit } from '$lib/submit';
 	import { toast } from '$lib/toasts.svelte';
 
@@ -31,12 +32,18 @@
 	let name = $state(untrack(() => data.node.name));
 	let description = $state(untrack(() => data.node.description));
 	let parentId = $state(untrack(() => data.node.parentId ?? ''));
+	let categoryId = $state(untrack(() => data.node.categoryId ?? ''));
 	let syncedFor = untrack(() => data.node.id);
-	const dirty = $derived(name !== node.name || description !== node.description || parentId !== (node.parentId ?? ''));
+	const dirty = $derived(
+		name !== node.name || description !== node.description || parentId !== (node.parentId ?? '') || categoryId !== (node.categoryId ?? '')
+	);
+	// Kategorien hører til mappa: velges en annen mappe, gjelder ikke kategorivalget lenger.
+	const moving = $derived(parentId !== (node.parentId ?? ''));
 	function resetAbout() {
 		name = node.name;
 		description = node.description;
 		parentId = node.parentId ?? '';
+		categoryId = node.categoryId ?? '';
 	}
 	$effect.pre(() => {
 		const n = node;
@@ -67,6 +74,10 @@
 		if (next.length !== current.length) selected = next;
 	});
 	const pending = $derived(data.photos.filter((p) => !p.stored).length);
+	const videosPending = $derived(data.photos.filter((p) => p.videoState === 'pending').length);
+	const videosFailed = $derived(data.photos.filter((p) => p.videoState === 'failed'));
+	const videoCount = $derived(data.photos.filter((p) => p.kind === 'video').length);
+	const countText = $derived(mediaCount(data.photos.length - videoCount, videoCount));
 	const allSelected = $derived(data.photos.length > 0 && selected.length === data.photos.length);
 
 	/** Klikk velger/fjerner ett bilde; shift-klikk velger alt mellom forrige og dette. */
@@ -117,6 +128,16 @@
 
 	const MODE = { public: 'Offentlig', private: 'Privat', client: 'Kunde' } as const;
 	const MODE_ICON = { public: 'globe', private: 'lock', client: 'user' } as const;
+
+	// Innholdet i mappa, gruppert etter kategori (i kategorienes rekkefølge, «Uten kategori» sist).
+	const childGroups = $derived.by(() => {
+		const cats = data.categories;
+		if (!cats.length) return [{ key: 'alle', name: '', hex: null as string | null, items: data.children }];
+		const known = new Set(cats.map((c) => c.id));
+		const groups = cats.map((c) => ({ key: c.id, name: c.name, hex: c.hex, items: data.children.filter((x) => x.categoryId === c.id) }));
+		const rest = data.children.filter((x) => !x.categoryId || !known.has(x.categoryId));
+		return [...groups, { key: 'ingen', name: 'Uten kategori', hex: null, items: rest }].filter((g) => g.items.length);
+	});
 </script>
 
 <svelte:head><title>{node.name} – Administrer</title></svelte:head>
@@ -135,7 +156,7 @@
 		</div>
 		<h1>{node.name}</h1>
 		<p class="meta">
-			{isAlbum ? plural(node.photoCount, 'bilde', 'bilder') : `${plural(node.albumCount, 'album', 'album')} · ${plural(node.photoCount, 'bilde', 'bilder')}`}
+			{isAlbum ? countText : `${plural(node.albumCount, 'album', 'album')} · ${plural(node.photoCount, 'bilde', 'bilder')}`}
 		</p>
 	</div>
 	<div class="head-actions">
@@ -166,8 +187,14 @@
 							onchange={() => (selected = allSelected ? [] : data.photos.map((p) => p.id))}
 							disabled={!data.photos.length}
 						/>
-						{selected.length ? `${selected.length} valgt` : plural(data.photos.length, 'bilde', 'bilder')}
+						{selected.length ? `${selected.length} valgt` : countText}
 					</label>
+					{#if videosPending}
+						<span class="badge" title="Videoer gjøres klare for avspilling i bakgrunnen, én om gangen">
+							<span class="spin" aria-hidden="true"></span>
+							{videosPending === 1 ? '1 video gjøres klar' : `${videosPending} videoer gjøres klare`}
+						</span>
+					{/if}
 					{#if pending}
 						<span class="badge" title="Originalene sendes til lagringen i bakgrunnen">
 							<Icon name="clock" size={12} />
@@ -219,6 +246,19 @@
 				</div>
 			</div>
 
+			{#if videosFailed.length}
+				<div class="notice-bad" role="status">
+					<Icon name="info" size={16} />
+					<span>
+						{videosFailed.length === 1 ? 'En video' : `${videosFailed.length} videoer`} kunne ikke gjøres klar for avspilling
+						({videosFailed[0].videoError ?? 'ukjent feil'}). Originalen er lagret og kan lastes ned.
+					</span>
+					<form method="POST" action="?/retryVideo" use:enhance={submit()}>
+						<input type="hidden" name="photo" value={videosFailed[0].id} />
+						<button class="btn" type="submit">Prøv igjen</button>
+					</form>
+				</div>
+			{/if}
 			{#if data.photos.length}
 				<ul class="photos">
 					{#each data.photos as p, i (p.id)}
@@ -234,6 +274,12 @@
 								<img src={p.src} srcset={p.srcset} sizes="200px" alt="" loading="lazy" />
 								<span class="tick"><Icon name="check" size={14} /></span>
 								{#if isCover}<span class="cover-tag"><Icon name="star" size={12} filled /> Forside</span>{/if}
+								{#if p.kind === 'video'}
+									<span class="vtag" class:bad={p.videoState === 'failed'} title={p.videoState === 'failed' ? (p.videoError ?? 'Feilet') : p.videoState === 'pending' ? 'Gjøres klar for avspilling' : 'Video'}>
+										{#if p.videoState === 'pending'}<span class="spin" aria-hidden="true"></span>{:else}<Icon name="play" size={11} filled />{/if}
+										{formatDuration(p.duration)}
+									</span>
+								{/if}
 								{#if !p.stored}
 									<span class="state" class:bad={!!p.error} title={p.error ?? 'Venter på å bli sendt til lagringen'}>
 										<Icon name={p.error ? 'cloud' : 'clock'} size={12} />
@@ -289,30 +335,53 @@
 				</form>
 			{/if}
 			{#if data.children.length}
-				<ul class="children">
-					{#each data.children as c (c.id)}
-						<li>
-							<a href="/admin/node/{c.id}">
-								<span class="cthumb" style:background-color={c.cover?.color}>
-									{#if c.cover}<img src={c.cover.src} srcset={c.cover.srcset} sizes="56px" alt="" loading="lazy" />{:else}<Icon
-											name={c.type === 'folder' ? 'folder' : 'image'}
-											size={18}
-										/>{/if}
-								</span>
-								<span class="ctext">
-									<span class="label">{c.name}</span>
-									<span class="faint">
-										{c.type === 'folder' ? 'Mappe · ' : ''}{c.type === 'album' ? plural(c.photoCount, 'bilde', 'bilder') : plural(c.albumCount, 'album', 'album')}
+				{#each childGroups as g (g.key)}
+					{#if data.categories.length}
+						<h3 class="cgroup">
+							<span class="cdot" class:none={!g.hex} style:background={g.hex ?? undefined}></span>{g.name}
+							<span class="faint">{g.items.length}</span>
+						</h3>
+					{/if}
+					<ul class="children">
+						{#each g.items as c (c.id)}
+							<li>
+								<a href="/admin/node/{c.id}">
+									<span class="cthumb" style:background-color={c.cover?.color}>
+										{#if c.cover}<img src={c.cover.src} srcset={c.cover.srcset} sizes="56px" alt="" loading="lazy" />{:else}<Icon
+												name={c.type === 'folder' ? 'folder' : 'image'}
+												size={18}
+											/>{/if}
 									</span>
-								</span>
-								<span class="pill {c.mode}">
-									<Icon name={MODE_ICON[c.mode]} size={12} />
-									<span class="pt">{c.mode === 'client' && c.clients.length ? c.clients.join(', ') : MODE[c.mode]}</span>
-								</span>
-							</a>
-						</li>
-					{/each}
-				</ul>
+									<span class="ctext">
+										<span class="label">{c.name}</span>
+										<span class="faint">
+											{c.type === 'folder' ? 'Mappe · ' : ''}{c.type === 'album' ? plural(c.photoCount, 'bilde', 'bilder') : plural(c.albumCount, 'album', 'album')}
+										</span>
+									</span>
+									<span class="pill {c.mode}">
+										<Icon name={MODE_ICON[c.mode]} size={12} />
+										<span class="pt">{c.mode === 'client' && c.clients.length ? c.clients.join(', ') : MODE[c.mode]}</span>
+									</span>
+								</a>
+								{#if data.categories.length}
+									<form method="POST" action="?/setCategory" use:enhance={submit()} class="ccat">
+										<input type="hidden" name="node" value={c.id} />
+										<select
+											class="input small"
+											name="category"
+											aria-label="Kategori for {c.name}"
+											value={c.categoryId ?? ''}
+											onchange={(e) => e.currentTarget.form?.requestSubmit()}
+										>
+											<option value="">Uten kategori</option>
+											{#each data.categories as k (k.id)}<option value={k.id}>{k.name}</option>{/each}
+										</select>
+									</form>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/each}
 			{:else}
 				<p class="muted empty">Mappa er tom.</p>
 			{/if}
@@ -350,6 +419,10 @@
 			</p>
 		</section>
 
+		{#if !isAlbum}
+			<CategoryPanel categories={data.categories} style={data.categoryStyle} colors={data.colors} previewHref={node.path} />
+		{/if}
+
 		<AccessPanel node={{ id: node.id, type: node.type, allowDownload: node.allowDownload }} access={data.access} mailReady={data.mailReady} {activity} />
 
 		<form method="POST" action="?/save" use:enhance={submit()} class="panel">
@@ -368,6 +441,15 @@
 				<textarea class="input" name="description" bind:value={description} rows="4" placeholder="Vises øverst på {isAlbum ? 'albumsiden' : 'mappesiden'}"
 				></textarea>
 			</label>
+			{#if data.parentCategories.length && !moving}
+				<label class="field">
+					<span>Kategori i mappa</span>
+					<select class="input" name="categoryId" bind:value={categoryId}>
+						<option value="">Uten kategori</option>
+						{#each data.parentCategories as k (k.id)}<option value={k.id}>{k.name}</option>{/each}
+					</select>
+				</label>
+			{/if}
 			<label class="field">
 				<span>Ligger i mappa</span>
 				<select class="input" name="parentId" bind:value={parentId}>
@@ -668,6 +750,7 @@
 		aspect-ratio: 1;
 		padding: 0;
 		border: 2px solid transparent;
+		background-clip: padding-box;
 		border-radius: 8px;
 		overflow: hidden;
 		cursor: pointer;
@@ -735,6 +818,61 @@
 	}
 	.state.bad {
 		color: var(--danger);
+	}
+	/* Ved siden av avkrysningen (stjernen for forsidebilde og lagringsstatus har de andre hjørnene). */
+	.vtag {
+		position: absolute;
+		left: 33px;
+		top: 7px;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 7px;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		background: rgba(12, 12, 13, 0.75);
+		color: #fff;
+	}
+	.vtag :global(svg) {
+		stroke-width: 0;
+	}
+	.vtag.bad {
+		color: var(--danger);
+	}
+	.spin {
+		display: inline-block;
+		width: 10px;
+		height: 10px;
+		border-radius: 999px;
+		border: 1.5px solid rgba(255, 255, 255, 0.3);
+		border-top-color: currentColor;
+		animation: spin 0.9s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	.notice-bad {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 10px;
+		margin: 0 0 14px;
+		padding: 10px 12px;
+		border: 1px solid rgba(255, 107, 94, 0.35);
+		border-radius: 12px;
+		background: rgba(255, 107, 94, 0.08);
+		font-size: 14px;
+	}
+	.notice-bad span {
+		flex: 1;
+		min-width: 220px;
+	}
+	.notice-bad form {
+		margin: 0;
 	}
 	.cap {
 		display: grid;
@@ -812,18 +950,69 @@
 		border-radius: 12px;
 		overflow: hidden;
 	}
+	.children li {
+		display: flex;
+		align-items: center;
+		background: var(--surface);
+	}
+	.children li:hover {
+		background: var(--surface-2);
+	}
 	.children li + li {
 		border-top: 1px solid var(--line);
 	}
 	.children a {
+		flex: 1;
+		min-width: 0;
 		display: flex;
 		align-items: center;
 		gap: 12px;
 		padding: 10px 14px;
-		background: var(--surface);
 	}
-	.children a:hover {
-		background: var(--surface-2);
+	.ccat {
+		flex: none;
+		margin: 0;
+		padding-right: 10px;
+	}
+	.ccat select {
+		max-width: 170px;
+	}
+	.cgroup {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 22px 0 10px;
+		font-size: 14px;
+		font-weight: 600;
+		letter-spacing: 0;
+	}
+	.cgroup:first-of-type {
+		margin-top: 4px;
+	}
+	.cgroup .faint {
+		font-weight: 400;
+	}
+	.cdot {
+		flex: none;
+		width: 9px;
+		height: 9px;
+		border-radius: 999px;
+	}
+	.cdot.none {
+		border: 1.5px solid var(--faint);
+	}
+	@media (max-width: 560px) {
+		.children li {
+			flex-wrap: wrap;
+		}
+		.ccat {
+			width: 100%;
+			padding: 0 14px 10px 74px;
+		}
+		.ccat select {
+			max-width: none;
+			width: 100%;
+		}
 	}
 	.cthumb {
 		flex: none;

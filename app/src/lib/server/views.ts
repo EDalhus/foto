@@ -35,7 +35,11 @@ export function photoView(p: Photo, album: TreeNode, user: SessionUser | null): 
 		takenAt: p.taken_at,
 		exif: p.exif,
 		download: canDownload(album, user) ? `/download/photo/${p.id}` : null,
-		og: mediaUrl(p, mediaFile('og.jpg', wm))
+		og: mediaUrl(p, mediaFile('og.jpg', wm)),
+		kind: p.kind,
+		duration: p.duration,
+		video: p.kind === 'video' && p.video_state === 'ready' ? mediaUrl(p, 'video.mp4') : null,
+		videoState: p.kind === 'video' ? p.video_state : null
 	};
 }
 

@@ -1,10 +1,16 @@
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { config } from './config';
 import { all, db, one, run } from './db';
 import { now } from './ids';
-import { pendingFile, type PhotoRow } from './photos';
+import { derivedDir, parsePhoto, pendingFile, type PhotoRow } from './photos';
 import { backupStore, originalStore, StoreUnavailableError } from './storage';
+import { cleanupUploads } from './uploads';
+import { makeWebVersion, probe } from './video';
 
 /**
  * Bakgrunnsjobber:
@@ -12,6 +18,7 @@ import { backupStore, originalStore, StoreUnavailableError } from './storage';
  *  - sletter originaler som er fjernet (kø, så det tåler at UNAS er nede)
  *  - sjekker jevnlig at lagringen svarer
  *  - tar backup av databasen til lagringen
+ *  - lager avspillingsversjonen av videoer (én om gangen, med lav prioritet)
  */
 
 export interface StoreHealth {
@@ -83,7 +90,9 @@ async function tick() {
 async function uploadPending(): Promise<boolean> {
 	const store = originalStore();
 	const rows = all<PhotoRow>(
-		`SELECT * FROM photos WHERE original_state = 'pending' ORDER BY original_attempts, created_at LIMIT 25`
+		// Videoer venter til avspillingsversjonen er laget – den lages fra den lokale kopien.
+		`SELECT * FROM photos WHERE original_state = 'pending' AND (video_state IS NULL OR video_state != 'pending')
+		 ORDER BY original_attempts, created_at LIMIT 25`
 	);
 	let did = false;
 	for (const row of rows) {
@@ -197,6 +206,7 @@ async function backupIfDue() {
 
 async function cleanTmp() {
 	// Rester etter avbrutte opplastinger.
+	await cleanupUploads().catch((err) => console.error('[foto] Rydding av opplastinger feilet:', err));
 	try {
 		for (const name of await fsp.readdir(config.tmpDir)) {
 			const p = path.join(config.tmpDir, name);
@@ -213,8 +223,138 @@ export function startWorker() {
 	state.started = true;
 	void checkHealth().then(() => kickWorker());
 	setInterval(() => void checkHealth().then(() => kickWorker()), 60_000).unref();
-	setInterval(() => kickWorker(), 20_000).unref();
+	setInterval(() => {
+		kickWorker();
+		kickVideo();
+	}, 20_000).unref();
+	setTimeout(() => kickVideo(), 1000).unref();
 	setInterval(() => void backupIfDue(), 15 * 60_000).unref();
 	setTimeout(() => void backupIfDue(), 30_000).unref();
 	setInterval(() => void cleanTmp(), 3600_000).unref();
+}
+
+// --- Video: avspillingsversjon ----------------------------------------------------------
+
+const MAX_VIDEO_ATTEMPTS = 3;
+const video = {
+	running: false,
+	again: false,
+	current: null as { id: string; ctrl: AbortController } | null,
+	/** Når forrige forsøk feilet fordi lagringen var nede – ikke prøv igjen før den svarer. */
+	waitStore: false
+};
+
+/** Be videoarbeideren se etter nye videoer. */
+export function kickVideo() {
+	if (!state.started) return;
+	if (video.running) {
+		video.again = true;
+		return;
+	}
+	setImmediate(() => void videoTick());
+}
+
+/** Stopp en pågående omkoding (videoen er slettet eller erstattet). */
+export function cancelVideo(photoId: string) {
+	if (video.current?.id === photoId) video.current.ctrl.abort();
+}
+
+/** Er en video under omkoding akkurat nå? */
+export function videoBusy(): string | null {
+	return video.current?.id ?? null;
+}
+
+async function videoTick() {
+	if (video.running) return;
+	video.running = true;
+	try {
+		for (let i = 0; i < 50; i++) {
+			video.again = false;
+			if (video.waitStore && state.health.ok === false) break;
+			const row = one<PhotoRow>(
+				`SELECT * FROM photos WHERE video_state = 'pending' ORDER BY video_attempts, created_at LIMIT 1`
+			);
+			if (!row) break;
+			await webVersion(row);
+		}
+	} catch (err) {
+		console.error('[foto] video:', err);
+	} finally {
+		video.running = false;
+		video.current = null;
+	}
+}
+
+/** Kilden til omkodingen: den lokale kopien, ellers hentes originalen fra lagringen til en midlertidig fil. */
+async function sourceFor(row: PhotoRow, signal: AbortSignal): Promise<{ file: string; temp: boolean }> {
+	const local = pendingFile(row);
+	if (await fsp.stat(local).catch(() => null)) return { file: local, temp: false };
+	const obj = await originalStore().get(row.original_key);
+	if (!obj) throw new Error('Originalen finnes ikke i lagringen.');
+	await fsp.mkdir(config.tmpDir, { recursive: true });
+	const file = path.join(config.tmpDir, `video-${randomUUID()}${path.extname(row.original_key)}`);
+	await pipeline(Readable.fromWeb(obj.body as never), fs.createWriteStream(file), { signal });
+	return { file, temp: true };
+}
+
+async function webVersion(row: PhotoRow) {
+	const ctrl = new AbortController();
+	video.current = { id: row.id, ctrl };
+	const out = path.join(derivedDir(row.id, row.version), 'video.mp4');
+	const tmp = `${out}.${randomUUID()}.tmp`;
+	let src: { file: string; temp: boolean } | null = null;
+	const started = Date.now();
+	try {
+		src = await sourceFor(row, ctrl.signal);
+		const info = parsePhoto(row).video ?? (await probe(src.file));
+		await fsp.mkdir(path.dirname(out), { recursive: true });
+		const how = await makeWebVersion(src.file, info, tmp, ctrl.signal);
+		await fsp.rename(tmp, out);
+		const r = run(
+			`UPDATE photos SET video_state = 'ready', video_error = NULL WHERE id = ? AND version = ? AND video_state = 'pending'`,
+			row.id,
+			row.version
+		);
+		if (!r.changes) await fsp.rm(out, { force: true });
+		video.waitStore = false;
+		console.log(
+			`[foto] Video klar: ${row.filename} (${how === 'copy' ? 'pakket om' : 'kodet om'} på ${Math.round((Date.now() - started) / 1000)} s)`
+		);
+	} catch (err) {
+		await fsp.rm(tmp, { force: true }).catch(() => {});
+		if (ctrl.signal.aborted) return; // slettet eller erstattet – ingenting å lagre
+		const message = (err as Error).message.slice(0, 500);
+		if (err instanceof StoreUnavailableError) {
+			// Ikke et forsøk: prøv igjen når lagringen svarer.
+			video.waitStore = true;
+			state.health = { ...state.health, ok: false, checkedAt: now(), error: err.message };
+			run(`UPDATE photos SET video_error = ? WHERE id = ? AND version = ?`, message, row.id, row.version);
+			return;
+		}
+		const attempts = row.video_attempts + 1;
+		run(
+			`UPDATE photos SET video_attempts = ?, video_error = ?, video_state = ? WHERE id = ? AND version = ? AND video_state = 'pending'`,
+			attempts,
+			message,
+			attempts >= MAX_VIDEO_ATTEMPTS ? 'failed' : 'pending',
+			row.id,
+			row.version
+		);
+		console.error(`[foto] Video feilet (${attempts}/${MAX_VIDEO_ATTEMPTS}): ${row.filename}: ${message}`);
+	} finally {
+		if (src?.temp) await fsp.rm(src.file, { force: true }).catch(() => {});
+		video.current = null;
+		// Originalen kan nå sendes til lagringen.
+		kickWorker();
+	}
+}
+
+/** «Prøv igjen» for en video som ikke ble klar. */
+export function retryVideo(photoId: string): boolean {
+	const r = run(
+		`UPDATE photos SET video_state = 'pending', video_attempts = 0, video_error = NULL WHERE id = ? AND kind = 'video' AND video_state = 'failed'`,
+		photoId
+	);
+	if (r.changes) kickVideo();
+	return r.changes > 0;
 }

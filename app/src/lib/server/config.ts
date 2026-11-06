@@ -31,6 +31,8 @@ export const config = {
 	},
 	backupIntervalHours: Number(env.BACKUP_INTERVAL_HOURS || 24),
 	backupKeep: Number(env.BACKUP_KEEP || 14),
-	/** Største tillatte opplasting i byte. */
-	maxUploadBytes: Number(env.MAX_UPLOAD_MB || 300) * 1024 * 1024
+	/** Største tillatte bilde i byte (og største opplasting i én forespørsel). */
+	maxUploadBytes: Number(env.MAX_UPLOAD_MB || 300) * 1024 * 1024,
+	/** Største fil som kan lastes opp i biter (video). */
+	maxLargeUploadBytes: Number(env.MAX_VIDEO_MB || 20480) * 1024 * 1024
 };

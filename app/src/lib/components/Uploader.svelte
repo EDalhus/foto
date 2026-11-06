@@ -11,10 +11,15 @@
 		progress: number;
 		status: 'waiting' | 'uploading' | 'processing' | 'done' | 'error';
 		error?: string;
+		video?: boolean;
 	}
 
-	const ACCEPT = 'image/jpeg,image/png,image/webp,image/tiff,image/avif,.jpg,.jpeg,.png,.webp,.tif,.tiff,.avif';
+	const ACCEPT =
+		'image/jpeg,image/png,image/webp,image/tiff,image/avif,.jpg,.jpeg,.png,.webp,.tif,.tiff,.avif,video/mp4,video/quicktime,video/*,.mp4,.mov,.m4v';
 	const PARALLEL = 3;
+	// Store filer (video) sendes i biter, så de kommer fram selv om nettet hikker underveis.
+	const CHUNKED_FROM = 64 * 1024 * 1024;
+	const isVideo = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|m4v|avi|mts|m2ts|mkv|webm)$/i.test(f.name);
 
 	let items = $state<Item[]>([]);
 	let dragging = $state(false);
@@ -48,12 +53,18 @@
 		}
 	}
 
-	function upload(item: Item): Promise<void> {
-		const update = (patch: Partial<Item>) => {
-			const i = items.findIndex((x) => x.key === item.key);
-			if (i >= 0) items[i] = { ...items[i], ...patch };
-		};
-		update({ status: 'uploading' });
+	type Update = (patch: Partial<Item>) => void;
+
+	function errorText(xhr: XMLHttpRequest) {
+		try {
+			return JSON.parse(xhr.responseText).error ?? `Feil ${xhr.status}`;
+		} catch {
+			return `Feil ${xhr.status}`;
+		}
+	}
+
+	/** Vanlig opplasting: hele fila i én forespørsel. */
+	function uploadWhole(item: Item, update: Update): Promise<void> {
 		return new Promise((resolve) => {
 			const xhr = new XMLHttpRequest();
 			xhr.open('POST', `/api/v1/albums/${albumId}/photos`);
@@ -62,15 +73,7 @@
 			};
 			xhr.onload = () => {
 				if (xhr.status >= 200 && xhr.status < 300) update({ status: 'done', progress: 1 });
-				else {
-					let msg = `Feil ${xhr.status}`;
-					try {
-						msg = JSON.parse(xhr.responseText).error ?? msg;
-					} catch {
-						// ikke JSON
-					}
-					update({ status: 'error', error: msg });
-				}
+				else update({ status: 'error', error: errorText(xhr) });
 				resolve();
 			};
 			xhr.onerror = () => {
@@ -81,6 +84,78 @@
 			form.append('file', item.file, item.file.name);
 			xhr.send(form);
 		});
+	}
+
+	/** Én bit. Svarer hvor mye serveren har fått (også når den sier 409 og vil ha en annen bit). */
+	function sendChunk(id: string, offset: number, blob: Blob, onprogress: (n: number) => void): Promise<number> {
+		return new Promise((resolve, reject) => {
+			const xhr = new XMLHttpRequest();
+			xhr.open('PUT', `/api/v1/uploads/${id}?offset=${offset}`);
+			xhr.setRequestHeader('content-type', 'application/octet-stream');
+			xhr.upload.onprogress = (e) => e.lengthComputable && onprogress(e.loaded);
+			xhr.onload = () => {
+				let body: { received?: number; error?: string } = {};
+				try {
+					body = JSON.parse(xhr.responseText);
+				} catch {
+					// ikke JSON
+				}
+				if ((xhr.status === 200 || xhr.status === 409) && typeof body.received === 'number') resolve(body.received);
+				else reject(Object.assign(new Error(body.error ?? `Feil ${xhr.status}`), { retry: xhr.status >= 500 }));
+			};
+			xhr.onerror = () => reject(Object.assign(new Error('Nettverksfeil'), { retry: true }));
+			xhr.send(blob);
+		});
+	}
+
+	const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+	/** Store filer: i biter på (inntil) 32 MB. En bit som feiler, sendes på nytt. */
+	async function uploadChunked(item: Item, update: Update): Promise<void> {
+		const size = item.file.size;
+		try {
+			const res = await fetch('/api/v1/uploads', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ albumId, filename: item.file.name, size })
+			});
+			const start = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(start.error ?? `Feil ${res.status}`);
+			let offset = 0;
+			let tries = 0;
+			while (offset < size) {
+				const end = Math.min(offset + start.chunkSize, size);
+				try {
+					const at = offset;
+					offset = await sendChunk(start.id, at, item.file.slice(at, end), (n) => update({ progress: Math.min(1, (at + n) / size) }));
+					tries = 0;
+				} catch (err) {
+					if (!(err as { retry?: boolean }).retry || ++tries > 4) throw err;
+					await pause(1000 * tries * tries);
+				}
+				update({ progress: offset / size });
+			}
+			update({ status: 'processing', progress: 1 });
+			for (let i = 0; ; i++) {
+				const done = await fetch(`/api/v1/uploads/${start.id}/complete`, { method: 'POST' }).catch(() => null);
+				if (done?.ok) break;
+				const body = await done?.json().catch(() => ({}));
+				if ((done && done.status < 500) || i >= 3) throw new Error(body?.error ?? (done ? `Feil ${done.status}` : 'Nettverksfeil'));
+				await pause(2000 * (i + 1));
+			}
+			update({ status: 'done', progress: 1 });
+		} catch (err) {
+			update({ status: 'error', error: (err as Error).message || 'Opplastingen feilet' });
+		}
+	}
+
+	function upload(item: Item): Promise<void> {
+		const update: Update = (patch) => {
+			const i = items.findIndex((x) => x.key === item.key);
+			if (i >= 0) items[i] = { ...items[i], ...patch };
+		};
+		update({ status: 'uploading', video: isVideo(item.file) });
+		return item.file.size >= CHUNKED_FROM || isVideo(item.file) ? uploadChunked(item, update) : uploadWhole(item, update);
 	}
 
 	function clearFinished() {
@@ -109,8 +184,8 @@
 	onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), input?.click())}
 >
 	<Icon name="upload" size={26} />
-	<strong>Slipp bilder her, eller klikk for å velge</strong>
-	<span class="muted">JPEG, PNG, WebP, TIFF eller AVIF. Originalen lagres i full oppløsning.</span>
+	<strong>Slipp bilder og videoer her, eller klikk for å velge</strong>
+	<span class="muted">JPEG, PNG, WebP, TIFF eller AVIF, og video (MP4 eller MOV). Originalen lagres i full oppløsning.</span>
 	<input
 		bind:this={input}
 		type="file"
@@ -130,7 +205,9 @@
 		<div class="summary">
 			<span>
 				{done} av {items.length} lastet opp{#if failed}, <span class="err">{failed} feilet</span>{/if}
-				{#if busy}<span class="muted"> – ikke lukk siden</span>{/if}
+				{#if busy}<span class="muted"> – ikke lukk siden</span>{:else if items.some((i) => i.video && i.status === 'done')}<span class="muted">
+						– videoene gjøres klare for avspilling i bakgrunnen</span
+					>{/if}
 			</span>
 			{#if !busy}<button class="btn ghost" onclick={clearFinished}>Fjern ferdige</button>{/if}
 		</div>
@@ -142,7 +219,7 @@
 					<span class="state">
 						{#if item.status === 'waiting'}Venter
 						{:else if item.status === 'uploading'}{Math.round(item.progress * 100)} %
-						{:else if item.status === 'processing'}Behandler …
+						{:else if item.status === 'processing'}{item.video ? 'Lager stillbilde …' : 'Behandler …'}
 						{:else if item.status === 'done'}<Icon name="check" size={16} />
 						{:else}{item.error}{/if}
 					</span>

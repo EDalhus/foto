@@ -4,6 +4,9 @@ import { accessForAll } from '$lib/server/access';
 import { getGroup, grantAccess, listGroups } from '$lib/server/guests';
 import { createNode, folderOptions, getNode, getTree, HttpError, pathOf, updateNode, type TreeNode } from '$lib/server/tree';
 import { cardViews } from '$lib/server/views';
+import { all as allRows } from '$lib/server/db';
+import { categoriesWithCounts, colorHex, COLORS, styleOf, type CategoryRow } from '$lib/server/categories';
+import { categoryActions } from '$lib/server/categoryActions';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
@@ -18,6 +21,7 @@ export const load: PageServerLoad = ({ locals }) => {
 	};
 	walk(tree.roots);
 	const covers = new Map(cardViews(all, locals.user).map((c) => [c.id, c.cover]));
+	const categories = new Map(allRows<CategoryRow>(`SELECT * FROM categories`).map((c) => [c.id, c]));
 	const rows = all.map((n) => {
 		const a = access.get(n.id);
 		const ancestors: string[] = [];
@@ -41,11 +45,19 @@ export const load: PageServerLoad = ({ locals }) => {
 			allowDownload: !!n.allow_download,
 			fromLightroom: !!n.lr_ref,
 			latest: n.photoCount ? n.latest : null,
-			cover: cover ? { src: cover.src, srcset: cover.srcset, color: cover.color } : null
+			cover: cover ? { src: cover.src, srcset: cover.srcset, color: cover.color } : null,
+			category: (() => {
+				const c = n.category_id ? categories.get(n.category_id) : undefined;
+				return c ? { name: c.name, hex: colorHex(c.color) } : null;
+			})()
 		};
 	});
 	return {
 		rows,
+		// Kategorier på forsiden (for mappene og albumene på toppnivå).
+		homeCategories: categoriesWithCounts(null),
+		homeStyle: styleOf(null),
+		colors: COLORS,
 		folders: folderOptions(),
 		groups: listGroups().map((g) => ({ id: g.id, name: g.name, kind: g.kind }))
 	};
@@ -63,6 +75,8 @@ function guard<T>(fn: () => T) {
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 export const actions: Actions = {
+	...categoryActions(() => null),
+
 	create: async ({ request }) => {
 		const form = await request.formData();
 		try {

@@ -18,5 +18,5 @@ return {
 		{ title = 'Kopier album fra SmugMug …', file = 'FotoCopyMenu.lua' },
 	},
 	-- Holdes lik FotoAPI.VERSION.
-	VERSION = { major = 0, minor = 4, revision = 0, build = 1 },
+	VERSION = { major = 0, minor = 5, revision = 0, build = 1 },
 }
