@@ -7,6 +7,7 @@
 	så et bilde aldri havner to ganger i albumet.
 ]]
 
+local LrFileUtils = import 'LrFileUtils'
 local LrHttp = import 'LrHttp'
 local LrPathUtils = import 'LrPathUtils'
 local LrMD5 = import 'LrMD5'
@@ -20,7 +21,7 @@ local FotoAPI = {}
 FotoAPI.__index = FotoAPI
 
 --- Holdes lik VERSION i Info.lua. Sendes til serveren i X-Foto-Plugin.
-FotoAPI.VERSION = '0.3.0'
+FotoAPI.VERSION = '0.4.0'
 
 local function trim(s)
 	return (tostring(s or ''):gsub('^%s+', ''):gsub('%s+$', ''))
@@ -286,6 +287,77 @@ end
 function FotoAPI:setOrder(albumId, photoIds)
 	local data, status = self:postJson('/api/v1/albums/' .. albumId .. '/order', { photoIds = JSON.array(photoIds) })
 	return ensure(data, status, 'Kunne ikke sette rekkefølgen på nettstedet')
+end
+
+-- «Synkroniser med Foto» -------------------------------------------------------
+
+local function urlEncode(s)
+	return (tostring(s or ''):gsub('[^%w%-%._~]', function(c) return string.format('%%%02X', string.byte(c)) end))
+end
+
+--- Hele strukturen på nettstedet: { nodes = { { id, type, name, parentId, visibility, allowDownload, url, path, link, photoIds? } } }.
+--- link er nil (laget på nettstedet), 'other' (en annen Lightroom-katalog) eller { lrId } (denne tjenesten).
+function FotoAPI:lrTree(serviceKey)
+	local data, status = self:get('/api/v1/lr/tree?serviceKey=' .. urlEncode(serviceKey))
+	if status == 404 then
+		error('Foto-serveren kan ikke synkronisere ennå. Oppdater Foto på serveren og prøv igjen.', 0)
+	end
+	data = ensure(data, status, 'Kunne ikke hente mapper og album fra nettstedet')
+	if type(data) ~= 'table' or type(data.nodes) ~= 'table' then error('Uventet svar fra nettstedet.', 0) end
+	return data.nodes
+end
+
+--- Bildene i et album: { { id, filename, downloadName, takenAt, width, height, bytes, mime, url } }.
+function FotoAPI:albumPhotos(albumId)
+	local data, status = self:get('/api/v1/albums/' .. albumId .. '/photos')
+	data = ensure(data, status, 'Kunne ikke hente bildene i albumet')
+	if type(data) ~= 'table' or type(data.photos) ~= 'table' then error('Uventet svar fra nettstedet.', 0) end
+	return data.photos
+end
+
+--- Kobler mapper/album på nettstedet til samlinger i Lightroom. links: { { id, kind, lrId, relink? } }.
+--- Returnerer { { id, ok, error? } } i samme rekkefølge.
+function FotoAPI:link(serviceKey, links)
+	local data, status = self:postJson('/api/v1/lr/link', { serviceKey = serviceKey, links = JSON.array(links) })
+	data = ensure(data, status, 'Kunne ikke koble til nettstedet')
+	if type(data) ~= 'table' or type(data.results) ~= 'table' then error('Uventet svar fra nettstedet.', 0) end
+	return data.results
+end
+
+--- Laster ned originalen til filePath (via en midlertidig fil, så en avbrutt nedlasting aldri ligger igjen
+--- som et halvt bilde). expectedBytes: størrelsen nettstedet oppgir, eller nil.
+function FotoAPI:download(photoId, filePath, expectedBytes)
+	local path = '/download/photo/' .. photoId
+	local headers = {
+		{ field = 'Authorization', value = 'Bearer ' .. self.token },
+		{ field = 'X-Foto-Plugin', value = FotoAPI.VERSION },
+	}
+	local body, h = self:request('GET ' .. path, { idempotent = true }, function()
+		return LrHttp.get(self.base .. path, headers, 300)
+	end)
+	if body == nil and type(h) == 'table' and h.error then parse(body, h) end -- kaster en lesbar feil
+	local status = type(h) == 'table' and tonumber(h.status) or 0
+	if status ~= 200 then
+		local data = nil
+		if body and body:sub(1, 1) == '{' then
+			local ok, decoded = pcall(JSON.decode, body)
+			if ok then data = decoded end
+		end
+		ensure(data, status, 'Kunne ikke laste ned bildet')
+	end
+	if type(body) ~= 'string' or #body == 0 then error('Kunne ikke laste ned bildet: tomt svar.', 0) end
+	if expectedBytes and tonumber(expectedBytes) and #body ~= tonumber(expectedBytes) then
+		error('Kunne ikke laste ned bildet: fikk ' .. #body .. ' av ' .. tostring(expectedBytes) .. ' byte.', 0)
+	end
+	local part = filePath .. '.part'
+	local f, err = io.open(part, 'wb')
+	if not f then error('Kunne ikke lagre bildet: ' .. tostring(err), 0) end
+	f:write(body)
+	f:close()
+	if LrFileUtils.exists(filePath) then LrFileUtils.delete(filePath) end
+	local moved = LrFileUtils.move(part, filePath)
+	if moved == false then error('Kunne ikke lagre bildet i ' .. filePath, 0) end
+	return #body
 end
 
 return FotoAPI

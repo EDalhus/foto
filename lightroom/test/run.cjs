@@ -21,11 +21,12 @@ reg('__http', (L) => {
   else if (body !== null) args.push('--data-binary', '@-');
   args.push(url);
   try {
-    const out = execFileSync('curl', args, { input: body ?? '', maxBuffer: 1 << 26 }).toString('utf8');
-    const i = out.lastIndexOf('\n');
-    const status = Number(out.slice(i + 1));
+    // Svaret som rå byte (bilder skal komme fram uendret), statuskoden på siste linje.
+    const out = execFileSync('curl', args, { input: body ?? '', maxBuffer: 1 << 28 });
+    const i = out.lastIndexOf(0x0a);
+    const status = Number(out.subarray(i + 1).toString('utf8'));
     if (!status) { lua.lua_pushnil(L); pushStr('cannotConnectToHost'); return 2; }
-    pushStr(out.slice(0, i)); lua.lua_pushinteger(L, status); return 2;
+    lua.lua_pushlstring(L, Uint8Array.from(out.subarray(0, i)), i); lua.lua_pushinteger(L, status); return 2;
   } catch (e) { lua.lua_pushnil(L); pushStr('cannotConnectToHost'); return 2; }
 });
 reg('__sql', (L) => {
@@ -47,6 +48,7 @@ reg('__copy', (L) => { fs.copyFileSync(str(1), str(2)); return 0; });
 // «Nettleseren»: logger inn som testadmin (egen cookie-fil) og gjør GET eller POST mot en side. Gir (status, body).
 reg('__browser', (L) => {
   const method = str(1), url = str(2), loggedIn = lua.lua_toboolean(L, 3);
+  const formData = lua.lua_isnoneornil(L, 4) ? '' : str(4);
   const jar = path.join(process.env.TMP, 'cookies.txt');
   const origin = new URL(url).origin;
   if (loggedIn && !fs.existsSync(jar)) {
@@ -55,14 +57,16 @@ reg('__browser', (L) => {
   }
   const args = ['-s', '-w', '\n%{http_code}', '-X', method, '-H', `Origin: ${origin}`];
   if (loggedIn) args.push('-b', jar);
-  if (method === 'POST') args.push('-H', 'x-sveltekit-action: true', '-H', 'content-type: application/x-www-form-urlencoded', '--data', '');
+  if (method === 'POST') args.push('-H', 'x-sveltekit-action: true', '-H', 'content-type: application/x-www-form-urlencoded', '--data', formData);
   args.push(url);
   const out = execFileSync('curl', args).toString('utf8');
   const i = out.lastIndexOf('\n');
   lua.lua_pushinteger(L, Number(out.slice(i + 1))); pushStr(out.slice(0, i)); return 2;
 });
 reg('__exists', (L) => { lua.lua_pushboolean(L, fs.existsSync(str(1))); return 1; });
-reg('__append', (L) => { fs.appendFileSync(str(1), str(2)); return 0; });
+reg('__append', (L) => { fs.appendFileSync(str(1), Buffer.from(lua.lua_tolstring(L, 2))); return 0; });
+reg('__mkdir', (L) => { fs.mkdirSync(str(1), { recursive: true }); return 0; });
+reg('__isdir', (L) => { lua.lua_pushboolean(L, fs.existsSync(str(1)) && fs.statSync(str(1)).isDirectory()); return 1; });
 reg('__read', (L) => { if (!fs.existsSync(str(1))) { lua.lua_pushnil(L); return 1; } pushStr(fs.readFileSync(str(1), 'utf8')); return 1; });
 reg('__size', (L) => { lua.lua_pushinteger(L, fs.existsSync(str(1)) ? fs.statSync(str(1)).size : -1); return 1; });
 reg('__rename', (L) => { try { fs.renameSync(str(1), str(2)); } catch {} return 0; });

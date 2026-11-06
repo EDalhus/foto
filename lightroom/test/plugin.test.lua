@@ -16,6 +16,7 @@ io.open = function(path, mode)
 		if content == nil then return nil, 'finnes ikke' end
 		return { seek = function() return #content end, read = function() return content end, close = function() end }
 	end
+	if mode:sub(1, 1) == 'w' then __rm(path) end
 	return { write = function(self, s) __append(path, s) return self end, close = function() end }
 end
 os.remove = function(p) __rm(p) return true end
@@ -111,6 +112,7 @@ modules.LrDialogs = {
 		return dialogs.modalResult
 	end,
 	attachErrorDialogToFunctionContext = function() end,
+	runOpenPanel = function(args) dialogs.lastOpenPanel = args return dialogs.openPanelResult end,
 }
 local factory = setmetatable({}, { __index = function(_, kind)
 	return function(self, t) t = t or {} t._kind = kind return t end
@@ -145,7 +147,23 @@ modules.LrPathUtils = {
 }
 modules.LrMD5 = { digest = function(s) return __md5(s) end }
 modules.LrDate = { currentTime = function() return os.time() + os.clock() end, timeToUserFormat = function(_, fmt) return os.date(fmt) end }
-modules.LrFileUtils = { delete = function(p) __rm(p) return true end, exists = function(p) return __exists(p) and 'file' or false end }
+modules.LrFileUtils = {
+	delete = function(p) __rm(p) return true end,
+	exists = function(p) if __isdir(p) then return 'directory' end return __exists(p) and 'file' or false end,
+	createAllDirectories = function(p) __mkdir(p) return true end,
+	fileAttributes = function(p) local n = __size(p) if n < 0 then return nil end return { fileSize = n } end,
+	move = function(a, b) __rename(a, b) return __exists(b) end,
+}
+local progressScopes = {}
+modules.LrProgressScope = setmetatable({}, { __call = function(_, args)
+	local scope = { title = args and args.title, captions = {}, canceled = false }
+	function scope:setCaption(c) self.captions[#self.captions + 1] = c end
+	function scope:setPortionComplete() end
+	function scope:isCanceled() return self.canceled end
+	function scope:done() self.finished = true end
+	progressScopes[#progressScopes + 1] = scope
+	return scope
+end })
 local revealed
 modules.LrShell = { revealInShell = function(p) revealed = p end }
 
@@ -216,11 +234,74 @@ function Obj:delete()
 	for i, c in ipairs(container._children) do if c == self then table.remove(container._children, i) break end end
 end
 function Obj:getPluginId() yields('getPluginId') return self._pluginId end
+function Obj:getPublishSettings() yields('getPublishSettings') return self._publishSettings end
+function Obj:getRemoteId() yields('getRemoteId') return self._remoteId end
+function Obj:getRemoteUrl() yields('getRemoteUrl') return self._remoteUrl end
+function Obj:setRemoteId(id) needsGate('setRemoteId') self._remoteId = id end
+function Obj:setRemoteUrl(url) needsGate('setRemoteUrl') self._remoteUrl = url end
+function Obj:setName(name)
+	needsGate('setName')
+	for _, c in ipairs((self._parent or self._service)._children) do
+		if c ~= self and c._name:lower() == name:lower() then return false end
+	end
+	self._name = name
+	return true
+end
+function Obj:setParent(parent)
+	needsGate('setParent')
+	if parent and parent._service ~= self._service then error('setParent: mappe i en annen tjeneste') end
+	local p = parent
+	while p do
+		if p == self then error('setParent: kan ikke legge en mappe i seg selv') end
+		p = p._parent
+	end
+	local old = self._parent or self._service
+	for i, c in ipairs(old._children) do if c == self then table.remove(old._children, i) break end end
+	self._parent = parent
+	table.insert((parent or self._service)._children, self)
+end
+local function publishedPhoto(entry)
+	return {
+		getRemoteId = function() return entry.remoteId end,
+		getRemoteUrl = function() return entry.url end,
+		getPhoto = function() return entry.photo end,
+		getEditedFlag = function() return false end,
+	}
+end
+function Obj:getPublishedPhotos()
+	yields('getPublishedPhotos')
+	local out = {}
+	for _, p in ipairs(self._photos) do
+		out[#out + 1] = publishedPhoto((self._published and self._published[p]) or { photo = p })
+	end
+	return out
+end
+function Obj:addPhotoByRemoteId(photo, remoteId, url, published)
+	needsGate('addPhotoByRemoteId')
+	sameGate(photo, 'bilde importert med addPhoto, brukt')
+	local member = false
+	for _, q in ipairs(self._photos) do if q == photo then member = true end end
+	if self._smart and not member then error('addPhotoByRemoteId: bildet er ikke med i det smarte albumet') end
+	if not member then table.insert(self._photos, photo) end
+	self._published = self._published or {}
+	self._published[photo] = { photo = photo, remoteId = remoteId, url = url, published = published }
+end
+function Obj:removePhotos(photos)
+	needsGate('removePhotos')
+	if self._smart then error('removePhotos på smart samling') end
+	for _, p in ipairs(photos) do
+		for i, q in ipairs(self._photos) do if q == p then table.remove(self._photos, i) break end end
+		if self._published then self._published[p] = nil end
+	end
+end
 local function create(service, kind, name, parent, canReturn, extra)
 	needsGate('create ' .. kind)
-	if canReturn then
-		for _, c in ipairs((parent or service)._children) do
-			if c._kind == kind and c._name == name then return c end
+	-- Som Lightroom: samme navn (uten hensyn til store/små bokstaver) gir den som finnes (canReturnExisting)
+	-- eller nil – og alltid nil når navnet er tatt av noe av en annen type.
+	for _, c in ipairs((parent or service)._children) do
+		if c._name:lower() == name:lower() then
+			if c._kind == kind and canReturn then return c end
+			return nil
 		end
 	end
 	return mkObj(kind, name, parent, service, extra)
@@ -251,13 +332,67 @@ local function service(name, pluginId)
 	table.insert(catalog._services, s)
 	return s
 end
-local function photo(id, meta)
-	return setmetatable({ _id = id, _meta = meta or {} }, { __index = function(t, k)
+local photoRegistry = {}
+local function photo(id, meta, raw)
+	local existing = photoRegistry[id]
+	if existing then
+		if meta then existing._meta = meta end
+		if raw then existing._raw = raw end
+		return existing
+	end
+	local p = setmetatable({ _id = id, _meta = meta or {}, _raw = raw or {} }, { __index = function(t, k)
 		if k == 'localIdentifier' then return rawget(t, '_id') end
 		if k == 'getFormattedMetadata' then
 			return function(self, key) yields('getFormattedMetadata') return self._meta[key] end
 		end
+		if k == 'getRawMetadata' then
+			return function(self, key) yields('getRawMetadata') return self._raw[key] end
+		end
 	end })
+	photoRegistry[id] = p
+	return p
+end
+catalog._photos = {}
+local importedPaths = {}
+local function catalogPhoto(id, raw)
+	local p = photo(id, nil, raw)
+	table.insert(catalog._photos, p)
+	return p
+end
+function catalog:getAllPhotos()
+	yields('getAllPhotos', true)
+	local out = {}
+	for i, p in ipairs(self._photos) do out[i] = p end
+	return out
+end
+function catalog:batchGetRawMetadata(photos, keys)
+	yields('batchGetRawMetadata', true)
+	local out = {}
+	for _, p in ipairs(photos) do
+		local m = {}
+		for _, k in ipairs(keys or {}) do m[k] = p._raw[k] end
+		out[p] = m
+	end
+	return out
+end
+local nextPhotoId = 5000
+function catalog:addPhoto(path)
+	needsGate('addPhoto')
+	if not __exists(path) then error('addPhoto: fila finnes ikke: ' .. tostring(path)) end
+	for _, p in ipairs(self._photos) do
+		if p._raw.path == path then error('addPhoto: fila er allerede i katalogen') end
+	end
+	nextPhotoId = nextPhotoId + 1
+	local p = photo(nextPhotoId, nil, { path = path, isVirtualCopy = false })
+	rawset(p, '_gate', gate.id)
+	table.insert(self._photos, p)
+	importedPaths[#importedPaths + 1] = path
+	return p
+end
+function catalog:findPhotoByPath(path)
+	yields('findPhotoByPath')
+	for _, p in ipairs(self._photos) do if p._raw.path == path then return p end end
+	return nil
 end
 
 -- Hjelpere ------------------------------------------------------------------------------------
@@ -696,6 +831,276 @@ print('19. JSON')
 local s = JSON.encode({ a = 'æøå "sitat" \n ny linje', b = { 1, 2, 3 }, c = true, d = 1.5, e = JSON.array({}) })
 local back = JSON.decode(s)
 check(back.a == 'æøå "sitat" \n ny linje' and back.b[3] == 3 and back.c == true and back.d == 1.5, 'tur-retur')
+
+print('20. Synkroniser med Foto')
+;(function()
+local Sync = require 'FotoSync'
+check(Sync.wallOf('2026-10-07T14:30:05.50+02:00') == '2026-10-07T14:30:05' and Sync.wallOf(nil) == nil, 'opptakstid som veggklokke')
+check(Sync.stemOf('/Bilder/ED1_0590.NEF') == 'ed1_0590' and Sync.stemOf('a.b.JPG') == 'a.b', 'filnavn uten endelse')
+check(Sync.safeName('A/B: «C»?') == 'A-B- «C»-' and Sync.safeName(' ..') == 'uten-navn', 'trygge mappenavn: ' .. Sync.safeName('A/B: «C»?'))
+check(#Sync.safeName(string.rep('æ', 80)) <= 100 and Sync.safeName(string.rep('æ', 80)):match('^[\195][\166]') ~= nil, 'lange navn kuttes uten å ødelegge æøå')
+
+local function urlenc(v)
+	return (tostring(v or ''):gsub('[^%w%-%._~]', function(c) return string.format('%%%02X', string.byte(c)) end))
+end
+local function form(t)
+	local parts = {}
+	for k, v in pairs(t) do parts[#parts + 1] = urlenc(k) .. '=' .. urlenc(v) end
+	table.sort(parts)
+	return table.concat(parts, '&')
+end
+local AUTH = 'Authorization: Bearer ' .. TOKEN .. '\nAccept: application/json'
+-- «Nettstedet»: det du gjør i admin, som innlogget administrator.
+local function webCreate(kind, name, parentId, visibility, allowDownload)
+	local f = { type = kind, name = name, parentId = parentId or '', visibility = visibility or 'public' }
+	if allowDownload then f.allowDownload = 'on' end
+	local st = __browser('POST', SERVER .. '/admin?/create', true, form(f))
+	local row = one("SELECT * FROM nodes WHERE name = '" .. name .. "' AND lr_ref IS NULL ORDER BY created_at DESC")
+	check(st == 200 and row, 'nettstedet: lagde ' .. kind .. ' «' .. name .. '» (' .. tostring(st) .. ')')
+	return row
+end
+local function webSave(node, fields)
+	local f = { name = fields.name or node.name, description = '', visibility = fields.visibility or node.visibility,
+		parentId = fields.parentId or node.parent_id or '', allowDownloadField = '1' }
+	if (fields.allowDownload == nil and node.allow_download == 1) or fields.allowDownload then f.allowDownload = 'on' end
+	return __browser('POST', SERVER .. '/admin/node/' .. node.id .. '?/save', true, form(f))
+end
+local function webUpload(albumId, file, name)
+	local body, status = __http('POST', SERVER .. '/api/v1/albums/' .. albumId .. '/photos', AUTH, nil,
+		JSON.encode({ { name = 'file', filePath = IMG .. '/' .. file, fileName = name, contentType = 'image/jpeg' } }))
+	local data = status == 201 and JSON.decode(body) or {}
+	check(status == 201 and data.id, 'nettstedet: lastet opp «' .. name .. '» (' .. tostring(status) .. ')')
+	return data.id
+end
+local function childNamed2(container, name, kind)
+	for _, c in ipairs(container._children) do
+		if c._name == name and (not kind or c._kind == kind) then return c end
+	end
+end
+local function publishedAs(col)
+	local out = {}
+	for ph, e in pairs(col._published or {}) do out[e.remoteId] = ph end
+	return out
+end
+local function publishTo(svc, svcSettings, collection, photos)
+	local renditions = {}
+	for i, p in ipairs(photos) do
+		local path = TMP .. '/render2-' .. i .. '-' .. p.file
+		__copy(IMG .. '/' .. p.file, path)
+		renditions[i] = {
+			photo = photo(p.lrId, p.meta or {}),
+			publishedPhotoId = p.publishedId,
+			waitForRender = function() return true, path end,
+			recordPublishedPhotoId = function(_, id) p.newId = id end,
+			recordPublishedPhotoUrl = function(_, url) p.url = url end,
+			uploadFailed = function(_, msg) p.failed = msg end,
+		}
+	end
+	local session = {
+		countRenditions = function() return #renditions end,
+		recordRemoteCollectionId = function(_, id) collection._remoteId = id end,
+		recordRemoteCollectionUrl = function(_, url) collection._remoteUrl = url end,
+	}
+	task(provider.processRenderedPhotos, {}, {
+		exportSession = session,
+		propertyTable = svcSettings,
+		publishedCollection = collection,
+		publishService = svc,
+		configureProgress = function()
+			return { setPortionComplete = function() end, isCanceled = function() return false end, done = function() end }
+		end,
+		renditions = function()
+			local i = 0
+			return function() i = i + 1 if renditions[i] then return i, renditions[i] end end
+		end,
+	})
+	-- Som Lightroom: bildene ligger i samlingen og er merket publisert.
+	collection._published = collection._published or {}
+	for i, p in ipairs(photos) do
+		local ph = renditions[i].photo
+		if p.newId then
+			local member = false
+			for _, q in ipairs(collection._photos) do if q == ph then member = true end end
+			if not member then table.insert(collection._photos, ph) end
+			collection._published[ph] = { photo = ph, remoteId = p.newId, url = p.url }
+		end
+	end
+end
+
+-- Egen Foto-tjeneste (egen serviceKey), så det som ble publisert over regnes som «en annen katalog».
+local settings2 = propertyTable()
+settings2.serverUrl, settings2.apiToken, settings2.serviceKey, settings2.siteName = SERVER, TOKEN, 'synktest01', '127.0.0.1'
+local foto2 = service('Foto: synk', 'net.dalhus.foto')
+foto2._publishSettings = settings2
+local otherCount = one("SELECT count(*) AS n FROM nodes WHERE lr_ref LIKE 'lr:" .. settings.serviceKey .. ":%'").n
+local otherRefsBefore = __sql("SELECT id, lr_ref FROM nodes WHERE lr_ref LIKE 'lr:" .. settings.serviceKey .. ":%' ORDER BY id")
+
+-- Lightroom: et album som er publisert herfra, og et upublisert album med samme navn som et album på nettstedet.
+local colEgen = mkObj('LrPublishedCollection', 'Egen', nil, foto2, { _settings = { visibility = 'public', allowDownload = false } })
+local pe = { { file = 'lite-med-exif.jpg', lrId = 201 }, { file = 'rotert-orientation6.jpg', lrId = 202 } }
+publishTo(foto2, settings2, colEgen, pe)
+local egen = one("SELECT * FROM nodes WHERE lr_ref = 'lr:synktest01:col:" .. colEgen._id .. "'")
+check(egen and pe[1].newId and pe[2].newId, 'publiserte «Egen» fra Lightroom')
+local colTvilling = mkObj('LrPublishedCollection', 'tvilling', nil, foto2, { _settings = { visibility = 'public' } })
+-- Katalogen: originalen til «match.jpg» (pluss en virtuell kopi og en med samme navn fra et annet år), og «uten-dato.jpg».
+local pMatch = catalogPhoto(301, { path = '/Bilder/2026/match.NEF', dateTimeOriginalISO8601 = '2026-10-07T14:30:05.00+02:00', isVirtualCopy = false })
+catalogPhoto(302, { path = '/Bilder/2026/match.NEF', dateTimeOriginalISO8601 = '2026-10-07T14:30:05.00+02:00', isVirtualCopy = true })
+catalogPhoto(303, { path = '/Bilder/2025/match.NEF', dateTimeOriginalISO8601 = '2025-01-01T10:00:00' })
+local pUtenDato = catalogPhoto(304, { path = '/Bilder/uten-dato.jpg', isVirtualCopy = false })
+
+-- Nettstedet: ny mappe med album og bilder, nytt album på toppnivå, «Tvilling», og endringer på «Egen».
+local gc = webCreate('folder', 'GC Rieber Minerals', nil, 'private')
+local bef = webCreate('album', 'Befaring', gc.id, 'public')
+local idMatch = webUpload(bef.id, 'lite-med-exif.jpg', 'match.jpg')
+local idBare = webUpload(bef.id, 'rotert-orientation6.jpg', 'bare-paa-nett.jpg')
+local idUtenDato = webUpload(bef.id, 'rotert-orientation6.jpg', 'uten-dato.jpg')
+local web = webCreate('album', 'Webalbum', nil, 'public', true)
+local idNett2 = webUpload(web.id, 'lite-med-exif.jpg', 'nett2.jpg')
+local tvilling = webCreate('album', 'Tvilling', nil, 'public')
+local idEkstra = webUpload(egen.id, 'lite-med-exif.jpg', 'ekstra.jpg')
+local stDel = __http('DELETE', SERVER .. '/api/v1/photos/' .. pe[2].newId, AUTH, nil, nil)
+local stSave = webSave(egen, { name = 'Egen (nytt navn)', visibility = 'private', parentId = gc.id })
+check(stSave == 200 and one("SELECT name FROM nodes WHERE id = '" .. egen.id .. "'").name == 'Egen (nytt navn)', 'nettstedet: «Egen» fikk nytt navn, ble privat og flyttet')
+local photosApi = JSON.decode((__http('GET', SERVER .. '/api/v1/albums/' .. bef.id .. '/photos', AUTH, nil, nil)))
+check(photosApi.photos[1].takenAt == '2026-10-07T14:30:05' and photosApi.photos[2].takenAt == nil and photosApi.photos[1].filename == 'match.jpg',
+	'API: bildene med filnavn og opptakstid som veggklokke (' .. tostring(photosApi.photos[1].takenAt) .. ')')
+
+-- Kjør «Synkroniser med Foto» slik den startes fra menyen.
+local syncModals, syncTexts = {}, {}
+local function runSync(choice)
+	syncModals, syncTexts = {}, {}
+	dialogs.messages = {}
+	dialogs.modalHook = function(args)
+		syncModals[#syncModals + 1] = args
+		local props = args.contents.bind_to_object
+		if args.actionVerb == 'Fortsett' then
+			local menu = find(args.contents, function(t) return t._kind == 'popup_menu' end)
+			for _, item in ipairs(menu.items) do if item.title == 'Foto: synk' then props.service = item.value end end
+		elseif args.actionVerb == 'Synkroniser' then
+			find(args.contents, function(t)
+				if type(t.title) == 'string' then syncTexts[#syncTexts + 1] = t.title end
+				return false
+			end)
+			if os.getenv('VIS_DIALOG') then print('    [vindu] ' .. table.concat(syncTexts, '\n    [vindu] ')) end
+			props.folder = TMP .. '/synk'
+			props.download = choice.download ~= false
+			props.remove = choice.remove == true
+		end
+	end
+	blocking(function() dofile(PLUGIN .. '/FotoSyncMenu.lua') end)
+	dialogs.modalHook = nil
+	return dialogs.messages[#dialogs.messages]
+end
+local function textHas(pattern)
+	for _, t in ipairs(syncTexts) do if t:find(pattern, 1, true) then return true end end
+	return false
+end
+
+local done1 = runSync({ download = true, remove = true })
+check(#syncModals == 2, 'valgte tjeneste og viste oversikten før noe ble endret (' .. #syncModals .. ' vinduer)')
+check(textHas('Nytt fra nettstedet: 1 mappe og 2 album'), 'oversikt: 1 ny mappe og 2 nye album')
+check(textHas('Kobles til den med samme navn i Lightroom: «Tvilling»'), 'oversikt: «Tvilling» kobles til albumet med samme navn')
+check(textHas('2 nye navn') and textHas('1 flyttet') and textHas('1 ny synlighet'), 'oversikt: endret på nettstedet')
+check(textHas('2 nye bilder på nettstedet finnes i katalogen'), 'oversikt: 2 bilder finnes i katalogen')
+check(textHas('Last ned og importer 3 bilder som bare finnes på nettstedet'), 'oversikt: 3 bilder kan lastes ned')
+check(textHas('Fjern fra Lightroom det som er slettet på nettstedet (1 bilde)'), 'oversikt: 1 bilde slettet på nettstedet')
+check(textHas(otherCount .. ' mapper og album hører til en annen Lightroom-katalog'), 'oversikt: ' .. otherCount .. ' hører til en annen katalog')
+
+local gcSet = childNamed2(foto2, 'GC Rieber Minerals', 'LrPublishedCollectionSet')
+local befCol = gcSet and childNamed2(gcSet, 'Befaring', 'LrPublishedCollection')
+local webCol = childNamed2(foto2, 'Webalbum', 'LrPublishedCollection')
+check(gcSet and gcSet._settings.visibility == 'private' and gcSet._remoteId == gc.id and tostring(gcSet._remoteUrl):find('/a/' .. gc.id, 1, true),
+	'Lightroom: mappa «GC Rieber Minerals» (privat, koblet til nettstedet)')
+check(befCol and befCol._remoteId == bef.id and befCol._settings.visibility == 'public', 'Lightroom: albumet «Befaring» i mappa')
+check(webCol and webCol._settings.allowDownload == true and webCol._remoteId == web.id, 'Lightroom: «Webalbum» med nedlasting på')
+local refOf = function(id) return one("SELECT lr_ref FROM nodes WHERE id = '" .. id .. "'").lr_ref end
+check(gcSet and refOf(gc.id) == 'lr:synktest01:set:' .. gcSet._id, 'nettstedet: mappa er koblet til Lightroom')
+check(befCol and refOf(bef.id) == 'lr:synktest01:col:' .. befCol._id and webCol and refOf(web.id) == 'lr:synktest01:col:' .. webCol._id, 'nettstedet: albumene er koblet til Lightroom')
+check(refOf(tvilling.id) == 'lr:synktest01:col:' .. colTvilling._id and colTvilling._remoteId == tvilling.id and colTvilling._name == 'Tvilling',
+	'«tvilling» i Lightroom ble koblet til «Tvilling» (ingen kopi) og fikk samme skrivemåte')
+local n2 = 0
+for _, c in ipairs(foto2._children) do if c._name:lower() == 'tvilling' then n2 = n2 + 1 end end
+check(n2 == 1, 'bare ett «Tvilling» i Lightroom')
+
+local bp = befCol and publishedAs(befCol) or {}
+check(bp[idMatch] == pMatch, '«match.jpg» koblet til originalen i katalogen (ikke den virtuelle kopien eller fjorårets)')
+check(bp[idUtenDato] == pUtenDato, '«uten-dato.jpg» koblet til bildet med samme filnavn')
+local barePath = TMP .. '/synk/GC Rieber Minerals/Befaring/bare-paa-nett.jpg'
+check(bp[idBare] and bp[idBare]._raw.path == barePath, '«bare-paa-nett.jpg» lastet ned og importert til ' .. barePath)
+check(__size(barePath) == __size(IMG .. '/rotert-orientation6.jpg') and not __exists(barePath .. '.part'), 'nedlastet fil er hel (samme størrelse som originalen)')
+check(befCol and befCol._photos[1] == pMatch and befCol._photos[2] == bp[idBare] and befCol._photos[3] == pUtenDato, 'samme rekkefølge som på nettstedet')
+local wp = webCol and publishedAs(webCol) or {}
+check(wp[idNett2] and wp[idNett2]._raw.path == TMP .. '/synk/Webalbum/nett2.jpg', '«nett2.jpg» lastet ned til Webalbum')
+local ep = publishedAs(colEgen)
+check(colEgen._name == 'Egen (nytt navn)' and colEgen._parent == gcSet and colEgen._settings.visibility == 'private', '«Egen» fikk nytt navn, ble flyttet og privat i Lightroom')
+check(ep[pe[1].newId] and not ep[pe[2].newId], 'bildet som ble slettet på nettstedet, er fjernet fra «Egen»')
+check(ep[idEkstra] and ep[idEkstra]._raw.path == TMP .. '/synk/GC Rieber Minerals/Egen (nytt navn)/ekstra.jpg', '«ekstra.jpg» lastet ned til «Egen»')
+check(#importedPaths == 3, '3 bilder importert i katalogen (' .. #importedPaths .. ')')
+check(__sql("SELECT id, lr_ref FROM nodes WHERE lr_ref LIKE 'lr:" .. settings.serviceKey .. ":%' ORDER BY id") == otherRefsBefore, 'den andre katalogens album er urørt')
+check(done1 and done1.msg == 'Synkronisert med Foto' and done1.info:find('Laget i Lightroom: 1 ny mappe og 2 nye album.', 1, true)
+	and done1.info:find('5 bilder fra nettstedet ligger nå i albumene (2 fantes i katalogen og 3 ble lastet ned og importert).', 1, true)
+	and done1.info:find('Fjernet fra Lightroom: 1 bilde.', 1, true), 'oppsummering: ' .. tostring(done1 and done1.info))
+check(prefs.syncFolder == TMP .. '/synk', 'mappa for nedlastinger huskes')
+
+-- Publiser fra Lightroom i albumet som ble laget på nettstedet: havner i samme album.
+local pb = { { file = 'lite-med-exif.jpg', lrId = 210 } }
+publishTo(foto2, settings2, befCol, pb)
+check(pb[1].newId and one("SELECT album_id FROM photos WHERE id = '" .. pb[1].newId .. "'").album_id == bef.id, 'publisert fra Lightroom til «Befaring» på nettstedet')
+check(one("SELECT count(*) AS n FROM nodes WHERE name = 'Befaring'").n == 1 and one("SELECT count(*) AS n FROM nodes WHERE name = 'GC Rieber Minerals'").n == 1, 'ingen nye kopier av mappa eller albumet')
+
+-- Slettet album på nettstedet, og en kobling som ikke kommer fram (lagres ved neste publisering).
+__browser('POST', SERVER .. '/admin/node/' .. web.id .. '?/delete', true, '')
+local halv = webCreate('album', 'Halvveis', nil, 'public')
+-- Samme bilde slettet og lastet opp på nytt på nettstedet: kobles til bildet i katalogen igjen (ingen kopi).
+__http('DELETE', SERVER .. '/api/v1/photos/' .. idMatch, AUTH, nil, nil)
+local idMatch2 = webUpload(bef.id, 'lite-med-exif.jpg', 'match.jpg')
+local importsBefore = #importedPaths
+httpFaults[#httpFaults + 1] = { pattern = 'POST /api/v1/lr/link', status = 500 }
+local done2 = runSync({ download = true, remove = true })
+local bp2 = publishedAs(befCol)
+local stillMember = false
+for _, q in ipairs(befCol._photos) do if q == pMatch then stillMember = true end end
+check(bp2[idMatch2] == pMatch and bp2[idMatch] == nil and stillMember and #importedPaths == importsBefore,
+	'samme bilde lastet opp på nytt: koblet til originalen igjen, ikke lastet ned som kopi')
+check(childNamed2(foto2, 'Webalbum') == nil, '«Webalbum» som ble slettet på nettstedet, er fjernet fra Lightroom')
+check(__exists(TMP .. '/synk/Webalbum/nett2.jpg'), 'det nedlastede bildet ligger igjen på disken')
+local halvCol = childNamed2(foto2, 'Halvveis', 'LrPublishedCollection')
+check(halvCol and halvCol._remoteId == halv.id and refOf(halv.id) == nil, '«Halvveis» laget i Lightroom; koblingen kom ikke fram')
+check(done2 and done2.msg == 'Synkronisert, med noen unntak' and done2.info:find('ble ikke lagret', 1, true), 'feilen vises: ' .. tostring(done2 and done2.info))
+local ph = { { file = 'lite-med-exif.jpg', lrId = 211 } }
+publishTo(foto2, settings2, halvCol, ph)
+check(refOf(halv.id) == 'lr:synktest01:col:' .. halvCol._id and one("SELECT album_id FROM photos WHERE id = '" .. ph[1].newId .. "'").album_id == halv.id,
+	'publisering koblet «Halvveis» likevel (ingen kopi på nettstedet)')
+check(one("SELECT count(*) AS n FROM nodes WHERE name = 'Halvveis'").n == 1, 'bare én «Halvveis» på nettstedet')
+
+local done3 = runSync({})
+check(#syncModals == 1 and done3 and done3.msg == 'Alt er likt', 'tredje gang: alt er likt (' .. tostring(done3 and done3.msg) .. ')')
+
+-- Koblingsreglene på serveren.
+local api2 = FotoAPI.new(settings2)
+local anOther = JSON.decode(otherRefsBefore)[1]
+local res = task(function()
+	return api2:link('synktest01', {
+		{ id = anOther.id, kind = 'album', lrId = 99999 },
+		{ id = 'finnesikke12', kind = 'album', lrId = 99998 },
+		{ id = halv.id, kind = 'folder', lrId = 99997 },
+		{ id = halv.id, kind = 'album', lrId = 99996 },
+	})
+end)
+check(res[1].ok == false and (tostring(res[1].error):find('annen Lightroom-katalog', 1, true) or tostring(res[1].error):find('mappe på nettstedet', 1, true)), 'kan ikke ta over noe fra en annen katalog: ' .. tostring(res[1].error))
+check(res[2].ok == false and tostring(res[2].error):find('Finnes ikke', 1, true), 'ukjent ID: ' .. tostring(res[2].error))
+check(res[3].ok == false and tostring(res[3].error):find('er et album', 1, true), 'feil type: ' .. tostring(res[3].error))
+check(res[4].ok == false and tostring(res[4].error):find('allerede koblet', 1, true), 'allerede koblet til en annen samling: ' .. tostring(res[4].error))
+check(refOf(halv.id) == 'lr:synktest01:col:' .. halvCol._id, 'koblingen er uendret')
+
+-- Uten lagret nøkkel stopper synkroniseringen før noe endres.
+settings2.serviceKey = ''
+local nodesBefore = __sql('SELECT id, lr_ref FROM nodes ORDER BY id')
+local stop = runSync({})
+check(#syncModals == 1 and stop and stop.msg == 'Lagre Foto-innstillingene én gang først' and __sql('SELECT id, lr_ref FROM nodes ORDER BY id') == nodesBefore,
+	'uten nøkkel: stopper og ber deg lagre innstillingene')
+settings2.serviceKey = 'synktest01'
+end)()
 
 print('')
 if #violations > 0 then

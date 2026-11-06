@@ -15,11 +15,11 @@ local LrDate = import 'LrDate'
 local LrFileUtils = import 'LrFileUtils'
 local LrHttp = import 'LrHttp'
 local LrPathUtils = import 'LrPathUtils'
-local LrPrefs = import 'LrPrefs'
 local LrSystemInfo = import 'LrSystemInfo'
 local LrTasks = import 'LrTasks'
 local LrView = import 'LrView'
 
+local Common = require 'FotoCommon'
 local FotoAPI = require 'FotoAPI'
 local JSON = require 'FotoJSON'
 local Log = require 'FotoLog'
@@ -78,105 +78,19 @@ end
 
 -- Hjelpefunksjoner ------------------------------------------------------------
 
---- Nøkkel som skiller denne publiseringstjenesten fra andre (f.eks. flere kataloger).
-local function serviceKeyOf(settings, publishService)
-	local key = settings and settings.serviceKey
-	if key and key ~= '' then return key end
-	if publishService and publishService.localIdentifier then
-		return 'svc' .. tostring(publishService.localIdentifier)
-	end
-	return 'standard'
-end
+-- Felles med «Synkroniser med Foto» (FotoCommon.lua).
+local serviceKeyOf = Common.serviceKeyOf
+local isSet = Common.isSet
+local nameOf = Common.nameOf
+local remoteIdOf = Common.remoteIdOf
+local settingsOf = Common.settingsOf
+local visibilityOf = Common.visibilityOf
+local parentEntry = Common.parentEntry
+local ancestry = Common.ancestry
 
-local function isSet(obj)
-	if obj == nil then return false end
-	local ok, t = pcall(function() return obj:type() end)
-	if ok and type(t) == 'string' then return t == 'LrPublishedCollectionSet' end
-	return obj.getPublishedPhotos == nil
-end
-
-local function nameOf(obj)
-	local ok, name = LrTasks.pcall(function() return obj:getName() end)
-	return ok and tostring(name) or '?'
-end
-
---- Innstillingene (synlighet, nedlasting) som er lagret på et album eller en mappe i Lightroom.
---- Kaster feil hvis de ikke kan leses – da er det tryggere å stoppe enn å gjette «offentlig».
-local function settingsOf(obj)
-	local ok, summary = LrTasks.pcall(function()
-		if isSet(obj) then return obj:getCollectionSetInfoSummary() end
-		return obj:getCollectionInfoSummary()
-	end)
-	if not ok then
-		error('Kunne ikke lese innstillingene for «' .. nameOf(obj) .. '» i Lightroom: ' .. FotoAPI.messageOf(summary), 0)
-	end
-	if type(summary) == 'table' and type(summary.collectionSettings) == 'table' then
-		return summary.collectionSettings
-	end
-	return {}
-end
-
-local function visibilityOf(settings)
-	if settings and settings.visibility == 'private' then return 'private' end
-	return 'public'
-end
-
-local function parentEntry(set)
-	return { lrId = set.localIdentifier, name = set:getName(), visibility = visibilityOf(settingsOf(set)) }
-end
-
---- Mappene over et album/en mappe, fra toppnivå og nedover, med synlighet.
-local function ancestry(obj)
-	local parents = JSON.array({})
-	local parent = obj:getParent()
-	local guard = 0
-	while parent and isSet(parent) and guard < 50 do
-		table.insert(parents, 1, parentEntry(parent))
-		parent = parent:getParent()
-		guard = guard + 1
-	end
-	return parents
-end
-
--- Innstillinger som ikke kom fram til nettstedet (f.eks. endret uten nett) -----
--- Lagres i pluginens innstillinger og sendes neste gang albumet (eller et album i mappa) publiseres.
-
-local Pending = {}
-
-local function pendingKey(serviceKey, kind, lrId)
-	return serviceKey .. ':' .. kind .. ':' .. tostring(lrId)
-end
-
-local function pendingRead()
-	local raw = LrPrefs.prefsForPlugin().pendingSettings
-	if type(raw) ~= 'string' or raw == '' then return {} end
-	local ok, t = pcall(JSON.decode, raw)
-	if ok and type(t) == 'table' then return t end
-	return {}
-end
-
-local function pendingWrite(t)
-	LrPrefs.prefsForPlugin().pendingSettings = next(t) ~= nil and JSON.encode(t) or ''
-end
-
-function Pending.has(serviceKey, kind, lrId)
-	return pendingRead()[pendingKey(serviceKey, kind, lrId)] == true
-end
-
-function Pending.mark(serviceKey, kind, lrId)
-	local t = pendingRead()
-	t[pendingKey(serviceKey, kind, lrId)] = true
-	pendingWrite(t)
-end
-
-function Pending.clear(serviceKey, kind, lrId)
-	local t = pendingRead()
-	local key = pendingKey(serviceKey, kind, lrId)
-	if t[key] ~= nil then
-		t[key] = nil
-		pendingWrite(t)
-	end
-end
+-- Innstillinger som ikke kom fram til nettstedet (f.eks. endret uten nett) lagres i Common.Pending
+-- og sendes neste gang albumet (eller et album i mappa) publiseres.
+local Pending = Common.Pending
 
 -- Innstillingsdialogen for tjenesten -------------------------------------------
 
@@ -440,6 +354,7 @@ local function pushSettings(publishSettings, info, kind)
 			parents = ancestry(obj),
 			visibility = visibilityOf(cs),
 			applySettings = true,
+			remoteId = remoteIdOf(obj),
 		}
 		if kind == 'album' then payload.allowDownload = cs.allowDownload == true end
 		FotoAPI.new(publishSettings):sync(payload)
@@ -489,6 +404,7 @@ local function syncAlbum(api, exportContext, settings)
 				parents = above,
 				visibility = p.visibility,
 				applySettings = true,
+				remoteId = p.remoteId,
 			}
 			Pending.clear(serviceKey, 'folder', p.lrId)
 			Log.info('Sendte ventende innstillinger for mappa', p.name, p.visibility)
@@ -507,6 +423,7 @@ local function syncAlbum(api, exportContext, settings)
 		visibility = visibilityOf(cs),
 		allowDownload = cs.allowDownload == true,
 		applySettings = pending,
+		remoteId = remoteIdOf(collection),
 	}
 	if pending then
 		Pending.clear(serviceKey, 'album', lrId)
@@ -622,6 +539,7 @@ function provider.renamePublishedCollection(publishSettings, info)
 		parents = ancestry(obj),
 		visibility = visibilityOf(settingsOf(obj)),
 		onlyIfExists = true,
+		remoteId = remoteIdOf(obj) or (info.remoteId and tostring(info.remoteId)) or nil,
 	}
 	Log.info('Nytt navn:', kind, tostring(info.name), (type(result) == 'table' and result.id) and '' or '(ikke publisert ennå)')
 end
@@ -680,6 +598,7 @@ function provider.reparentPublishedCollection(publishSettings, info)
 		parents = newParents(info),
 		visibility = visibilityOf(settingsOf(obj)),
 		onlyIfExists = true,
+		remoteId = remoteIdOf(obj) or (info.remoteId and tostring(info.remoteId)) or nil,
 	}
 	Log.info('Flyttet:', kind, tostring(info.name or nameOf(obj)), (type(result) == 'table' and result.path) or '(ikke publisert ennå)')
 end

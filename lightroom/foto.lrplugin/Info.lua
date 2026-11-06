@@ -10,11 +10,13 @@ return {
 		file = 'FotoServiceProvider.lua',
 	},
 	LrExportMenuItems = {
+		{ title = 'Synkroniser med Foto …', file = 'FotoSyncMenu.lua' },
 		{ title = 'Kopier album fra SmugMug …', file = 'FotoCopyMenu.lua' },
 	},
 	LrLibraryMenuItems = {
+		{ title = 'Synkroniser med Foto …', file = 'FotoSyncMenu.lua' },
 		{ title = 'Kopier album fra SmugMug …', file = 'FotoCopyMenu.lua' },
 	},
 	-- Holdes lik FotoAPI.VERSION.
-	VERSION = { major = 0, minor = 3, revision = 0, build = 1 },
+	VERSION = { major = 0, minor = 4, revision = 0, build = 1 },
 }

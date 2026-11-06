@@ -20,7 +20,7 @@ Kjører i dag på **https://foto.dalhus.net**.
 - **Søk** i titler, bildetekster, stikkord og filnavn, og i navn på album og mapper. Bare det brukeren har tilgang til, vises.
 - **Bildevisning** som zoomer ut fra miniatyren og tilbake når den lukkes – siden står da ved bildet du så sist. Dra ned for å lukke på mobil. **Lysbildefremvisning** (mellomrom eller ▶), i fullskjerm der nettleseren støtter det.
 - **Vannmerke** (valgfritt, under **Administrer → Innstillinger**) på offentlige bilder. Du og gjester i private album ser bildene uten. Vannmerkede versjoner lages første gang de trengs.
-- **Lightroom Classic-plugin** (publiseringstjeneste). Samlingssett blir mapper, samlinger blir album. Nye versjoner, sletting, navnebytter, flytting og rekkefølge følger med.
+- **Lightroom Classic-plugin** (publiseringstjeneste). Samlingssett blir mapper, samlinger blir album. Nye versjoner, sletting, navnebytter, flytting og rekkefølge følger med. Det du lager på nettstedet, kan hentes inn i Lightroom med **Synkroniser med Foto**.
 - **Opplasting fra nettleseren** (dra og slipp) i admin.
 - **Nedlasting i full oppløsning** – enkeltbilder og hele album som zip – når det er slått på for albumet.
 - **Originaler og webversjoner hver for seg.** Webversjoner (WebP i fire størrelser) ligger på serveren og vises raskt. Originalene lagres i en egen lagring (lokal disk eller S3) og hentes bare ved nedlasting.
@@ -64,6 +64,12 @@ Hva den gjør:
 
 - **Synlighet per album og mappe** (høyreklikk → Rediger). En privat mappe skjuler alt under seg. Endrer du noe uten nett, huskes det og sendes neste gang albumet publiseres.
 - **Navnebytte, flytting, sletting og egendefinert rekkefølge** følger med til nettstedet.
+- **Synkroniser med Foto:** **Fil → Ekstra pluginmoduler → Synkroniser med Foto …** henter det som er laget eller endret på nettstedet inn i Lightroom, så du kan fortsette å publisere derfra:
+  - Mapper og album som er laget på nettstedet, blir mapper og album under Foto-tjenesten, koblet til dem på nettstedet. Det du publiserer i dem, havner på samme sted. Finnes et upublisert album med samme navn i Lightroom fra før, kobles det i stedet for å lage et nytt.
+  - Bilder som er lastet opp på nettstedet, kobles til samme bilde i katalogen når det finnes der (samme filnavn uten filendelse, og samme opptakstid – f.eks. `ED1_0590.jpg` på nettstedet og `ED1_0590.NEF` i katalogen). Ellers kan originalene lastes ned og importeres (standard: `~/Pictures/Foto/<mappe>/<album>/`, «Bilder» i Finder). Bildene merkes som publisert, så de lastes ikke opp på nytt.
+  - Navn, plassering og synlighet som er endret på nettstedet, oppdateres i Lightroom. Innstillinger du endret i Lightroom uten nett, sendes først og vinner.
+  - Det som er slettet på nettstedet, kan fjernes fra Lightroom (valgfritt, av som standard).
+  - Du ser en oversikt og bekrefter før noe endres. Bildene på nettstedet endres aldri. Mapper og album fra en annen Lightroom-katalog røres ikke.
 - **Kopier fra SmugMug:** **Fil → Ekstra pluginmoduler → Kopier album fra SmugMug …** lager samme mapper og album (også smarte album) under Foto, med de samme bildene. Synligheten hentes fra SmugMug der det går (Public blir offentlig, alt annet privat). Bare katalogen endres – ingenting lastes opp før du trykker Publiser, og SmugMug-tjenesten røres ikke. Kan kjøres flere ganger.
 - **Tåler hikke:** forbigående feil (f.eks. mens serveren starter på nytt) prøves på nytt. Nye bilder lastes bare opp på nytt når det er sikkert at de ikke kom fram første gang, så det blir ingen duplikater.
 - **Logg** i `~/Library/Logs/Foto-Lightroom.log` (knapp under Fil → Behandle tilleggsprogrammer → Foto). API-nøkkelen logges aldri.
@@ -126,6 +132,9 @@ Alle kall krever `Authorization: Bearer <API-nøkkel>` (eller innlogget økt fra
 | `POST` | `/api/v1/lr/sync` | Finn/opprett mappe eller album ut fra Lightroom-ID-er |
 | `POST` | `/api/v1/lr/delete-collection` | Slett mappe/album |
 | `POST` | `/api/v1/lr/delete-photos` | Slett flere bilder: `{ "ids": [...] }` |
+| `GET` | `/api/v1/lr/tree?serviceKey=` | Hele strukturen med koblingen til Lightroom (`link`: `null` = laget på nettstedet, `{ lrId }` = denne tjenesten, `"other"` = en annen katalog) og bilde-ID-ene i hvert album |
+| `POST` | `/api/v1/lr/link` | Koble mapper/album til samlinger i Lightroom: `{ "serviceKey", "links": [{ "id", "kind", "lrId", "relink"? }] }` |
+| `GET` | `/api/v1/albums/:id/photos` | Bildene i et album med filnavn, opptakstid (veggklokke) og størrelse |
 
 Uten innlogging: `/health` og `/health/storage` (200/503, for overvåking).
 

@@ -40,5 +40,5 @@ db.prepare('INSERT INTO api_tokens (id, user_id, name, token_hash, prefix, creat
 console.log(t);" 2>/dev/null)
 
 echo "== Pluginen mot testserver på port $PORT"
-ADMIN_EMAIL=test@example.com ADMIN_PASSWORD="$PW" PLUGIN="$PLUGIN" IMG="$WORK/img" TMP="$WORK/run" SERVER="http://127.0.0.1:$PORT" TOKEN="$TOKEN" DB="$WORK/data/foto.db" \
+VIS_DIALOG="${VIS_DIALOG:-}" ADMIN_EMAIL=test@example.com ADMIN_PASSWORD="$PW" PLUGIN="$PLUGIN" IMG="$WORK/img" TMP="$WORK/run" SERVER="http://127.0.0.1:$PORT" TOKEN="$TOKEN" DB="$WORK/data/foto.db" \
 	NODE_NO_WARNINGS=1 node run.cjs plugin.test.lua
