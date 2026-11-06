@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { favoriteIds, linkSendAllowed, markSubmitted, submittedAt } from '$lib/server/guests';
+import { favoriteIds, linkSendAllowed, markSubmitted, submission } from '$lib/server/guests';
 import { noticeMail, notifyAdmin } from '$lib/server/mail';
 import { getPhotosByIds, listPhotos } from '$lib/server/photos';
 import { canDownload, canFavorite, canView, isAdmin, pathOf, resolvePath, visibleChildren } from '$lib/server/tree';
@@ -43,8 +43,14 @@ export const load: PageServerLoad = ({ params, locals, url }) => {
 	}
 	const photos = listPhotos(node.id).map((p) => photoView(p, node, locals.user));
 	const taken = photos.map((p) => p.takenAt).filter((t): t is number => !!t);
+	const sub = canFavorite(node, locals.user) ? submission(locals.user!.id, node.id) : null;
 	const fav = canFavorite(node, locals.user)
-		? { ids: favoriteIds(locals.user!.id, node.id), submittedAt: submittedAt(locals.user!.id, node.id) }
+		? {
+				ids: favoriteIds(locals.user!.id, node.id),
+				submittedAt: sub?.submittedAt ?? null,
+				lockedAt: sub?.lockedAt ?? null,
+				target: node.pick_count
+			}
 		: null;
 	return {
 		...base,
@@ -65,6 +71,7 @@ export const actions: Actions = {
 		const user = locals.user;
 		if (!user || !canFavorite(node, user)) return fail(403, { error: 'Du kan ikke velge bilder i dette albumet.' });
 		const ids = favoriteIds(user.id, node.id);
+		if (submission(user.id, node.id)?.lockedAt) return fail(409, { error: 'Valget er allerede sendt. Ta kontakt med fotografen hvis du vil endre det.' });
 		if (!ids.length) return fail(400, { error: 'Du har ikke valgt noen bilder ennå. Trykk på hjertet på bildene du vil ha.' });
 		if (!linkSendAllowed(`fav:${user.id}:${node.id}`, 5)) return fail(429, { error: 'Du har sendt mange ganger nå. Vent litt og prøv igjen.' });
 		markSubmitted(user.id, node.id, ids.length);
@@ -77,12 +84,16 @@ export const actions: Actions = {
 				to,
 				subject: `${user.name || user.email} har valgt ${ids.length} ${ids.length === 1 ? 'bilde' : 'bilder'} i «${node.name}»`,
 				heading: `${ids.length} ${ids.length === 1 ? 'bilde' : 'bilder'} valgt i «${node.name}»`,
-				lines: [`${who} har sendt deg valget sitt.`, 'Filnavnene (lim dem inn i Lightroom-filteret «Filnavn inneholder» for å finne bildene):'],
+				lines: [
+					`${who} har sendt deg valget sitt${node.pick_count ? ` – ${ids.length} av ${node.pick_count} bilder` : ''}.`,
+					'Valget er låst. Vil kunden endre noe, låser du det opp på albumsiden.',
+					'Filnavnene (lim dem inn i Lightroom-filteret «Filnavn inneholder» for å finne bildene):'
+				],
 				list: names.map((n) => n.replace(/\.[^.]+$/, '')).join(' '),
 				url: `${url.origin}/admin/node/${node.id}#favoritter`,
 				button: 'Se valget'
 			})
 		);
-		return { sent: ids.length };
+		return { sent: ids.length, message: `Takk! Valget ditt (${ids.length} ${ids.length === 1 ? 'bilde' : 'bilder'}) er sendt til fotografen.` };
 	}
 };

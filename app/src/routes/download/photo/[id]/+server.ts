@@ -6,6 +6,7 @@ import { contentDisposition } from '$lib/server/http';
 import { downloadName, getPhoto, pendingFile } from '$lib/server/photos';
 import { originalStore, StoreUnavailableError } from '$lib/server/storage';
 import { canDownload, canView } from '$lib/server/tree';
+import { recordDownload } from '$lib/server/stats';
 import { albumOf } from '$lib/server/views';
 import type { RequestHandler } from './$types';
 
@@ -30,6 +31,8 @@ export const GET: RequestHandler = async ({ params, locals, request }) => {
 		'accept-ranges': 'bytes'
 	};
 	const range = parseRange(request.headers.get('range'));
+	// Tell nedlastingen én gang (ikke når nettleseren fortsetter en avbrutt nedlasting).
+	if (!range || range.start === 0) recordDownload(album, locals.user, 'photo');
 
 	// Originalen er ikke sendt til lagringen ennå – bruk den lokale kopien.
 	if (photo.original_state === 'pending') {

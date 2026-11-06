@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { submit } from '$lib/submit';
 
 	let { data, form } = $props();
 	let enabled = $state(false);
@@ -10,6 +11,12 @@
 		text = data.watermark.text;
 		position = data.watermark.position;
 	});
+	let remind = $state(false);
+	let days = $state(3);
+	$effect(() => {
+		remind = data.reminders.enabled;
+		days = data.reminders.days;
+	});
 	const year = new Date().getFullYear();
 </script>
 
@@ -18,14 +25,13 @@
 <h1>Innstillinger</h1>
 
 <div class="cols">
-	<form method="POST" action="?/watermark" use:enhance={() => async ({ update }) => update({ reset: false })} class="panel">
+	<div class="stack">
+	<form method="POST" action="?/watermark" use:enhance={submit()} class="panel">
 		<h2>Vannmerke</h2>
 		<p class="hint">
 			Legges på bildene i offentlige album. Gjester som ser private album du har delt med dem, og du selv, ser bildene uten. Små
 			miniatyrbilder og originalene du laster ned får aldri vannmerke.
 		</p>
-		{#if form?.error}<p class="notice error" role="alert">{form.error}</p>{/if}
-		{#if form?.saved}<p class="notice success" role="status">Lagret.</p>{/if}
 		<label class="check">
 			<input type="checkbox" name="enabled" bind:checked={enabled} />
 			Vis vannmerke på offentlige bilder
@@ -41,6 +47,25 @@
 		</fieldset>
 		<button class="btn primary" type="submit">Lagre</button>
 	</form>
+
+	<form method="POST" action="?/reminders" use:enhance={submit()} class="panel">
+		<h2>Påminnelse før tilgangen går ut</h2>
+		<p class="hint">
+			Har en gruppe «tilgang til og med» en dato, får gjestene en e-post med en lenke som logger dem rett inn, noen dager før tilgangen går ut. De får én
+			påminnelse per dato – endrer du datoen, kommer en ny.
+		</p>
+		{#if !data.mailReady}<p class="notice warn">E-post er ikke satt opp på serveren, så det sendes ingen påminnelser.</p>{/if}
+		<label class="check">
+			<input type="checkbox" name="enabled" bind:checked={remind} />
+			Send påminnelse på e-post
+		</label>
+		<label class="field days">
+			<span>Antall dager før</span>
+			<input class="input" type="number" name="days" min="1" max="30" bind:value={days} required />
+		</label>
+		<button class="btn primary" type="submit">Lagre</button>
+	</form>
+	</div>
 
 	{#if data.preview}
 		<figure class="preview">
@@ -72,6 +97,13 @@
 		.cols {
 			grid-template-columns: 1fr;
 		}
+	}
+	.stack {
+		display: grid;
+		gap: 20px;
+	}
+	.days .input {
+		width: 110px;
 	}
 	.panel {
 		display: grid;

@@ -12,10 +12,12 @@ import {
 	removeMember,
 	revokeAccess,
 	setAccess,
+	unlockSubmission,
 	updateGroup
 } from '$lib/server/guests';
 import { inviteLink, sendInvite } from '$lib/server/invite';
 import { mailConfigured } from '$lib/server/mail';
+import { nodeStats } from '$lib/server/stats';
 import { deleteNode, deletePhotos, listPhotos, movePhotos, sortByTaken } from '$lib/server/photos';
 import { ancestors, createNode, folderOptions, getNode, getTree, HttpError, pathOf, updateNode, type TreeNode } from '$lib/server/tree';
 import { cardViews, coverView, imageView } from '$lib/server/views';
@@ -65,7 +67,8 @@ export const load: PageServerLoad = ({ params, locals }) => {
 			fromLightroom: !!node.lr_ref,
 			path: pathOf(node),
 			photoCount: node.photoCount,
-			albumCount: node.albumCount
+			albumCount: node.albumCount,
+			pickCount: node.pick_count
 		},
 		crumbs: ancestors(node).map((a) => ({
 			name: a.name,
@@ -93,7 +96,8 @@ export const load: PageServerLoad = ({ params, locals }) => {
 		favorites: node.type === 'album' ? favoritesInAlbum(node.id) : [],
 		folders: folderOptions(node),
 		albums: node.type === 'album' ? albumOptions(node.id) : [],
-		mailReady: mailConfigured()
+		mailReady: mailConfigured(),
+		stats: nodeStats(node.id)
 	};
 };
 
@@ -348,6 +352,28 @@ export const actions: Actions = {
 			const form = await request.formData();
 			const { guest, url: link } = inviteLink(str(form, 'user'), url.origin);
 			return { link, email: guest.email };
+		}),
+
+	/** «Kunden skal velge N bilder» (tomt = så mange de vil). */
+	pickCount: ({ request, params }) =>
+		guard(async () => {
+			const form = await request.formData();
+			const node = nodeOr404(params.id);
+			if (node.type !== 'album') throw new HttpError(400, 'Gjelder bare album.');
+			const raw = str(form, 'count').trim();
+			const count = raw ? Number(raw) : null;
+			if (count !== null && !Number.isInteger(count)) throw new HttpError(400, 'Skriv et helt tall.');
+			updateNode(node.id, { pickCount: count });
+			return { message: count ? `Gjestene skal velge ${count} ${count === 1 ? 'bilde' : 'bilder'}.` : 'Gjestene kan velge så mange de vil.' };
+		}),
+
+	/** Lar gjesten endre valget og sende det på nytt. */
+	unlockFavorites: ({ request, params }) =>
+		guard(async () => {
+			const form = await request.formData();
+			nodeOr404(params.id);
+			if (!unlockSubmission(str(form, 'user'), params.id)) throw new HttpError(400, 'Valget er ikke låst.');
+			return { message: 'Valget er låst opp. Gi beskjed til gjesten om at de kan endre det.' };
 		}),
 
 	sortByDate: ({ params }) =>

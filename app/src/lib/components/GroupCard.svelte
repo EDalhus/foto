@@ -12,8 +12,17 @@
 		client = false,
 		albumDownload = false,
 		isAlbum = true,
-		mailReady = false
-	}: { g: GroupAccessView; client?: boolean; albumDownload?: boolean; isAlbum?: boolean; mailReady?: boolean } = $props();
+		mailReady = false,
+		activity = {}
+	}: {
+		g: GroupAccessView;
+		client?: boolean;
+		albumDownload?: boolean;
+		isAlbum?: boolean;
+		mailReady?: boolean;
+		activity?: Record<string, { views: number; downloads: number; zips: number; lastAt: number }>;
+	} = $props();
+	const times = (n: number) => (n === 1 ? 'én gang' : `${n} ganger`);
 
 	let adding = $state(false);
 	let manual = $state<{ user: string; url: string } | null>(null);
@@ -81,6 +90,16 @@
 						<span class="faint">
 							{m.name ? `${m.email} · ` : ''}{m.lastLogin ? `sist innlogget ${formatLocal(m.lastLogin)}` : 'ikke logget inn ennå'}
 						</span>
+						{#if activity[m.id]}
+							{@const a = activity[m.id]}
+							<span class="seen">
+								<Icon name="eye" size={12} /> Har sett {isAlbum ? 'albumet' : 'mappa'} {times(a.views)}{a.downloads ? `, lastet ned ${a.downloads} ${a.downloads === 1 ? 'bilde' : 'bilder'}` : ''}{a.zips
+									? `${a.downloads ? ' og' : ','} hele albumet`
+									: ''} · sist {formatLocal(a.lastAt)}
+							</span>
+						{:else if m.lastLogin}
+							<span class="faint seen">Har ikke åpnet {isAlbum ? 'albumet' : 'mappa'} ennå</span>
+						{/if}
 					</div>
 					<div class="acts">
 						<button class="btn ghost small" type="button" onclick={() => copyLink(m.id)} title="Kopier innloggingslenke">
@@ -143,6 +162,7 @@
 				<label for="exp-{g.id}">Tilgang til og med</label>
 				<input id="exp-{g.id}" class="input small" type="date" name="expires" value={g.expiresDate} onchange={autosubmit} />
 			</form>
+			{#if g.remindedAt && !g.expired}<p class="faint small"><Icon name="mail" size={12} /> Påminnelse sendt {formatLocal(g.remindedAt)}.</p>{/if}
 			<p class="faint small">Gjelder alt som er delt med {g.name}.</p>
 		</div>
 	{/if}
@@ -210,6 +230,16 @@
 	.who .faint {
 		font-size: 12px;
 		overflow-wrap: anywhere;
+	}
+	.seen {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 12px;
+		color: var(--ok);
+	}
+	.seen.faint {
+		color: var(--faint);
 	}
 	.acts {
 		display: flex;

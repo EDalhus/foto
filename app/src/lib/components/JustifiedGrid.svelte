@@ -6,11 +6,13 @@
 		photos,
 		onopen,
 		favorites = null,
+		favoritesLocked = false,
 		ontogglefavorite
 	}: {
 		photos: PhotoView[];
 		onopen: (id: string, event: MouseEvent) => void;
 		favorites?: Set<string> | null;
+		favoritesLocked?: boolean;
 		ontogglefavorite?: (id: string) => void;
 	} = $props();
 
@@ -40,7 +42,9 @@
 					decoding="async"
 				/>
 			</a>
-			{#if favorites}
+			{#if favorites && favoritesLocked}
+				{#if fav}<span class="fav on locked" title="Valgt" aria-label="Valgt"><Icon name="heart" size={20} filled /></span>{/if}
+			{:else if favorites}
 				<button
 					class="fav"
 					class:on={fav}
@@ -105,6 +109,10 @@
 	}
 	.fav.on {
 		color: #ff6b81;
+	}
+	.fav.locked {
+		cursor: default;
+		pointer-events: none;
 	}
 	@media (hover: none) {
 		.fav {

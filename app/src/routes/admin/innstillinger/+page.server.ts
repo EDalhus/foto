@@ -3,6 +3,8 @@ import { one } from '$lib/server/db';
 import { getPhoto } from '$lib/server/photos';
 import { getTree, HttpError } from '$lib/server/tree';
 import { mediaFile, mediaUrl } from '$lib/server/views';
+import { mailConfigured } from '$lib/server/mail';
+import { getReminders, saveReminders } from '$lib/server/reminders';
 import { getWatermark, saveWatermark } from '$lib/server/watermark';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -22,6 +24,8 @@ export const load: PageServerLoad = () => {
 	const w = getWatermark();
 	const p = samplePhoto();
 	return {
+		reminders: getReminders(),
+		mailReady: mailConfigured(),
 		watermark: { enabled: w.enabled, text: w.text, position: w.position },
 		preview: p
 			? {
@@ -43,6 +47,17 @@ export const actions: Actions = {
 			if (err instanceof HttpError) return fail(err.status, { error: err.message });
 			throw err;
 		}
-		return { saved: true };
+		return { saved: true, message: 'Vannmerket er lagret.' };
+	},
+
+	reminders: async ({ request }) => {
+		const form = await request.formData();
+		try {
+			const r = saveReminders({ enabled: form.get('enabled') === 'on', days: form.get('days') });
+			return { message: r.enabled ? `Gjestene får påminnelse ${r.days} ${r.days === 1 ? 'dag' : 'dager'} før tilgangen går ut.` : 'Påminnelser er slått av.' };
+		} catch (err) {
+			if (err instanceof HttpError) return fail(err.status, { error: err.message });
+			throw err;
+		}
 	}
 };

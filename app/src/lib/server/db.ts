@@ -135,6 +135,32 @@ const MIGRATIONS: string[] = [
 		submitted_at INTEGER NOT NULL,
 		PRIMARY KEY (user_id, album_id)
 	);
+	`,
+	// 4: «velg N bilder», låst valg, påminnelse før tilgangen går ut, statistikk per mappe/album.
+	`
+	ALTER TABLE nodes ADD COLUMN pick_count INTEGER;
+	ALTER TABLE favorite_submissions ADD COLUMN locked_at INTEGER;
+	ALTER TABLE groups ADD COLUMN reminded_at INTEGER;
+	CREATE TABLE node_stats (
+		node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+		day TEXT NOT NULL,
+		views INTEGER NOT NULL DEFAULT 0,
+		downloads INTEGER NOT NULL DEFAULT 0,
+		zips INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (node_id, day)
+	);
+	CREATE INDEX node_stats_day ON node_stats (day);
+	CREATE TABLE guest_activity (
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+		views INTEGER NOT NULL DEFAULT 0,
+		downloads INTEGER NOT NULL DEFAULT 0,
+		zips INTEGER NOT NULL DEFAULT 0,
+		first_at INTEGER NOT NULL,
+		last_at INTEGER NOT NULL,
+		PRIMARY KEY (user_id, node_id)
+	);
+	CREATE INDEX guest_activity_node ON guest_activity (node_id);
 	`
 ];
 

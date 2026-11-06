@@ -1,12 +1,14 @@
 import type { Handle, HandleServerError, ServerInit } from '@sveltejs/kit';
 import { ensureAdmin, purgeExpiredSessions, SESSION_COOKIE, userFromApiToken, userFromSession } from '$lib/server/auth';
 import { isAdmin } from '$lib/server/tree';
+import { startReminders } from '$lib/server/reminders';
 import { startWorker } from '$lib/server/worker';
 
 export const init: ServerInit = async () => {
 	await ensureAdmin();
 	purgeExpiredSessions();
 	startWorker();
+	startReminders();
 };
 
 export const handle: Handle = async ({ event, resolve }) => {

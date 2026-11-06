@@ -25,6 +25,7 @@
 		onclose,
 		albumName = '',
 		favorites = null,
+		favoritesLocked = false,
 		ontogglefavorite,
 		thumb,
 		handoff = false,
@@ -38,6 +39,8 @@
 		albumName?: string;
 		/** Bilder gjesten har valgt. null = favoritter er ikke tilgjengelig her. */
 		favorites?: Set<string> | null;
+		/** Valget er sendt og låst. */
+		favoritesLocked?: boolean;
 		ontogglefavorite?: (id: string) => void;
 		/** Miniatyren til et bilde i rutenettet bak – bildet zoomer ut fra og tilbake til den. */
 		thumb?: (id: string) => HTMLElement | null;
@@ -219,7 +222,7 @@
 			else close();
 		} else if (e.key === 'i') showInfo = !showInfo;
 		else if (e.key === ' ' || e.key === 'p') toggleSlideshow();
-		else if (e.key === 'f' && favorites && photo) ontogglefavorite?.(photo.id);
+		else if (e.key === 'f' && favorites && photo && !favoritesLocked) ontogglefavorite?.(photo.id);
 		else return;
 		e.preventDefault();
 	}
@@ -339,7 +342,9 @@
 			<button class="icon" onclick={close} aria-label="Lukk" title="Lukk (Esc)"><Icon name="x" size={22} /></button>
 			<span class="count">{index + 1} / {photos.length}</span>
 			<div class="actions">
-				{#if favorites}
+				{#if favorites && favoritesLocked}
+					{#if isFav}<span class="icon fav on locked" title="Valgt" aria-label="Valgt"><Icon name="heart" size={21} filled /></span>{/if}
+				{:else if favorites}
 					<button
 						class="icon fav"
 						class:on={isFav}
@@ -551,6 +556,10 @@
 	}
 	.icon.fav:hover {
 		background: rgba(255, 255, 255, 0.1);
+	}
+	.icon.fav.locked {
+		cursor: default;
+		background: transparent;
 	}
 	.icon.cover.on {
 		color: var(--warn);

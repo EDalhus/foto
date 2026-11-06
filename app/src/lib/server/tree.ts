@@ -20,6 +20,8 @@ export interface NodeRow {
 	visibility: Visibility;
 	allow_download: number;
 	cover_photo_id: string | null;
+	/** Album: hvor mange bilder gjestene skal velge (null = så mange de vil). */
+	pick_count: number | null;
 	sort_index: number;
 	lr_ref: string | null;
 	created_at: number;
@@ -417,6 +419,8 @@ export interface UpdateNodeInput {
 	/** null = flytt til toppnivå */
 	parentId?: string | null;
 	coverPhotoId?: string | null;
+	/** «Velg N bilder» (null = fritt). */
+	pickCount?: number | null;
 }
 
 export function updateNode(id: string, patch: UpdateNodeInput): void {
@@ -453,8 +457,13 @@ export function updateNode(id: string, patch: UpdateNodeInput): void {
 				throw new HttpError(400, 'Forsidebildet må ligge i et album i mappa.');
 			}
 		}
+		let pick = row.pick_count;
+		if (patch.pickCount !== undefined) {
+			pick = patch.pickCount;
+			if (pick !== null && (!Number.isInteger(pick) || pick < 1 || pick > 10000)) throw new HttpError(400, 'Antallet må være et helt tall fra 1 og oppover.');
+		}
 		run(
-			`UPDATE nodes SET parent_id = ?, name = ?, slug = ?, description = ?, visibility = ?, allow_download = ?, cover_photo_id = ?, updated_at = ? WHERE id = ?`,
+			`UPDATE nodes SET parent_id = ?, name = ?, slug = ?, description = ?, visibility = ?, allow_download = ?, cover_photo_id = ?, pick_count = ?, updated_at = ? WHERE id = ?`,
 			parentId,
 			name,
 			slug,
@@ -462,6 +471,7 @@ export function updateNode(id: string, patch: UpdateNodeInput): void {
 			patch.visibility !== undefined ? (patch.visibility === 'private' ? 'private' : 'public') : row.visibility,
 			patch.allowDownload !== undefined ? (patch.allowDownload ? 1 : 0) : row.allow_download,
 			cover,
+			pick,
 			now(),
 			id
 		);

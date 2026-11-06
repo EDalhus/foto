@@ -72,6 +72,32 @@ export function loginMail(opts: { to: string; name: string; url: string; invite:
 	};
 }
 
+/** Påminnelse til en gjest om at tilgangen snart går ut. */
+export function reminderMail(opts: { to: string; name: string; until: string; items: string[]; url: string; canDownload: boolean }): Mail {
+	const site = config.siteTitle;
+	const hello = opts.name ? `Hei ${opts.name}!` : 'Hei!';
+	const intro = `Bildene ${site} har delt med deg, er tilgjengelige til og med ${opts.until}.`;
+	const tip = opts.canDownload
+		? 'Last ned bildene du vil ta vare på før det.'
+		: 'Har du ikke sett gjennom dem ennå, er det fortsatt tid.';
+	const note = 'Knappen logger deg rett inn. Lenken virker én gang.';
+	const list = opts.items.join('\n');
+	return {
+		to: opts.to,
+		subject: `Bildene fra ${site} er tilgjengelige til og med ${opts.until}`,
+		text: `${hello}\n\n${intro} ${tip}\n\n${list}\n\n${opts.url}\n\n${note}\n`,
+		html: `<!doctype html><html><body style="margin:0;padding:32px 16px;background:#f4f4f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1b1b1d">
+<div style="max-width:460px;margin:0 auto;background:#fff;border-radius:12px;padding:28px">
+<p style="margin:0 0 6px;font-size:13px;color:#6b6b70">${esc(site)}</p>
+<h1 style="margin:0 0 16px;font-size:22px">${esc(hello)}</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.5">${esc(intro)} ${esc(tip)}</p>
+<ul style="margin:0 0 22px;padding-left:18px;font-size:15px;line-height:1.6">${opts.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+<p style="margin:0 0 22px"><a href="${esc(opts.url)}" style="display:inline-block;background:#1b1b1d;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">Se bildene</a></p>
+<p style="margin:0;font-size:13px;line-height:1.5;color:#6b6b70">${esc(note)}</p>
+</div></body></html>`
+	};
+}
+
 /** Varsel til deg (administratoren). */
 export function noticeMail(opts: { to: string; subject: string; heading: string; lines: string[]; url?: string; button?: string; list?: string }): Mail {
 	const site = config.siteTitle;

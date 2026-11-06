@@ -5,6 +5,8 @@ const dataDir = path.resolve(env.DATA_DIR || './data');
 
 export const config = {
 	siteTitle: env.SITE_TITLE || 'Foto',
+	/** Nettstedets adresse (for lenker i e-post som sendes i bakgrunnen). */
+	origin: (env.ORIGIN || '').replace(/\/+$/, ''),
 	siteTagline: env.SITE_TAGLINE || '',
 	dataDir,
 	dbPath: path.join(dataDir, 'foto.db'),

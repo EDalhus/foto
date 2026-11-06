@@ -88,6 +88,7 @@
 							<span class="badge expired"><Icon name="clock" size={12} /> Utløpt</span>
 						{:else if g.expiresDate}
 							<span class="badge"><Icon name="clock" size={12} /> Til og med {dateText(g.expiresDate)}</span>
+							{#if g.reminded_at}<span class="badge" title="Sendt {formatLocal(g.reminded_at)}"><Icon name="mail" size={12} /> Påminnelse sendt</span>{/if}
 						{/if}
 						<span class="faint count">{g.members.length} {g.members.length === 1 ? 'person' : 'personer'} · {g.access.length} delt</span>
 					</summary>

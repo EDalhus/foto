@@ -3,6 +3,7 @@
 	import { enhance } from '$app/forms';
 	import { beforeNavigate } from '$app/navigation';
 	import AccessPanel from '$lib/components/AccessPanel.svelte';
+	import BarChart from '$lib/components/BarChart.svelte';
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import CoverPicker from '$lib/components/CoverPicker.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -106,6 +107,13 @@
 			prompt('Kopier lenken:', `${data.origin}${node.path}`);
 		}
 	}
+
+	// Statistikk (siste 30 dager) og hva hver gjest har gjort.
+	const dayShort = new Intl.DateTimeFormat('nb-NO', { weekday: 'short', day: 'numeric', month: 'long', timeZone: 'UTC' });
+	const statBars = $derived(
+		data.stats.series.map((p) => ({ short: '', label: dayShort.format(new Date(`${p.key}T12:00:00Z`)), value: p.views }))
+	);
+	const activity = $derived(Object.fromEntries(data.stats.guests.map((g) => [g.userId, g])));
 
 	const MODE = { public: 'Offentlig', private: 'Privat', client: 'Kunde' } as const;
 	const MODE_ICON = { public: 'globe', private: 'lock', client: 'user' } as const;
@@ -342,7 +350,7 @@
 			</p>
 		</section>
 
-		<AccessPanel node={{ id: node.id, type: node.type, allowDownload: node.allowDownload }} access={data.access} mailReady={data.mailReady} />
+		<AccessPanel node={{ id: node.id, type: node.type, allowDownload: node.allowDownload }} access={data.access} mailReady={data.mailReady} {activity} />
 
 		<form method="POST" action="?/save" use:enhance={submit()} class="panel">
 			<h2>Om {it}</h2>
@@ -382,39 +390,94 @@
 			</div>
 		</form>
 
-		{#if isAlbum && data.favorites.length}
+		{#if isAlbum && (data.favorites.length || data.access.groups.some((g) => g.shared))}
 			<div class="panel" id="favoritter">
-				<h2>Favoritter</h2>
-				<p class="hint">Bildene gjestene har valgt med hjertet.</p>
-				<ul class="favs">
-					{#each data.favorites as f (f.user.id)}
+				<h2>Kundens valg</h2>
+				<form method="POST" action="?/pickCount" use:enhance={submit()} class="pick-row">
+					<label for="pick-count">Gjestene skal velge</label>
+					<input id="pick-count" class="input small num" type="number" name="count" min="1" max="10000" value={node.pickCount ?? ''} placeholder="fritt" />
+					<span>bilder</span>
+					<button class="btn" type="submit">Lagre</button>
+				</form>
+				<p class="hint">
+					Står feltet tomt, kan de velge så mange de vil. Med et antall ser de «12 av {node.pickCount ?? 30} valgt» og kan ikke velge flere.
+					Valget låses når det er sendt.
+				</p>
+				{#if data.favorites.length}
+					<ul class="favs">
+						{#each data.favorites as f (f.user.id)}
+							<li>
+								<div>
+									<strong>{f.user.name || f.user.email}</strong>
+									<span class="faint">
+										{node.pickCount ? `${f.photos.length} av ${node.pickCount}` : plural(f.photos.length, 'bilde', 'bilder')} ·
+										{#if f.lockedAt}sendt {formatLocal(f.lockedAt)} · låst{:else if f.submittedAt}sendt {formatLocal(f.submittedAt)} · låst opp{:else}ikke sendt
+											ennå{/if}
+									</span>
+								</div>
+								<div class="buttons">
+									<button class="btn" type="button" onclick={() => copyNames(f.user.id, f.photos)}>
+										<Icon name={copiedFor === f.user.id ? 'check' : 'copy'} size={16} />
+										{copiedFor === f.user.id ? 'Kopiert' : 'Kopier filnavn'}
+									</button>
+									<button
+										class="btn ghost"
+										type="button"
+										onclick={() => {
+											selected = f.photos.map((p) => p.id);
+											tab = 'main';
+										}}>Marker i albumet</button
+									>
+									{#if f.lockedAt}
+										<form method="POST" action="?/unlockFavorites" use:enhance={submit()}>
+											<input type="hidden" name="user" value={f.user.id} />
+											<button class="btn ghost" type="submit" title="La {f.user.name || f.user.email} endre valget"><Icon name="lock" size={16} /> Lås opp</button>
+										</form>
+									{/if}
+								</div>
+							</li>
+						{/each}
+					</ul>
+					<p class="hint">Lim filnavnene inn i Lightroom: Bibliotekfilter → Tekst → Filnavn → Inneholder.</p>
+				{:else}
+					<p class="hint">Ingen har valgt bilder ennå. Gjestene velger med hjertet på bildene.</p>
+				{/if}
+			</div>
+		{/if}
+
+		<section class="panel stats">
+			<div class="panel-head">
+				<h2>Statistikk</h2>
+				<a class="linkish" href="/admin/statistikk">Alt</a>
+			</div>
+			<div class="stat-row">
+				<div><strong>{data.stats.last30.views.toLocaleString('nb-NO')}</strong><span>visninger</span></div>
+				{#if isAlbum}<div><strong>{data.stats.last30.downloads.toLocaleString('nb-NO')}</strong><span>bilder lastet ned</span></div>{/if}
+				{#if data.stats.last30.zips}<div><strong>{data.stats.last30.zips}</strong><span>som zip</span></div>{/if}
+			</div>
+			{#if data.stats.last30.views}
+				<BarChart bars={statBars} unit={['visning', 'visninger']} height={56} compact />
+			{/if}
+			<p class="hint">
+				Siste 30 dager. Totalt {plural(data.stats.total.views, 'visning', 'visninger')}{isAlbum
+					? ` og ${plural(data.stats.total.downloads, 'nedlasting', 'nedlastinger')}`
+					: ''}. Du selv telles ikke.
+			</p>
+			{#if data.stats.guests.length}
+				<ul class="guest-stats">
+					{#each data.stats.guests as g (g.userId)}
 						<li>
-							<div>
-								<strong>{f.user.name || f.user.email}</strong>
-								<span class="faint">
-									{plural(f.photos.length, 'bilde', 'bilder')} · {f.submittedAt ? `sendt ${formatLocal(f.submittedAt)}` : 'ikke sendt ennå'}
-								</span>
-							</div>
-							<div class="buttons">
-								<button class="btn" type="button" onclick={() => copyNames(f.user.id, f.photos)}>
-									<Icon name={copiedFor === f.user.id ? 'check' : 'copy'} size={16} />
-									{copiedFor === f.user.id ? 'Kopiert' : 'Kopier filnavn'}
-								</button>
-								<button
-									class="btn ghost"
-									type="button"
-									onclick={() => {
-										selected = f.photos.map((p) => p.id);
-										tab = 'main';
-									}}>Marker i albumet</button
-								>
-							</div>
+							<strong>{g.name || g.email}</strong>
+							<span class="faint">
+								{plural(g.views, 'visning', 'visninger')}{g.downloads ? ` · ${plural(g.downloads, 'bilde', 'bilder')} lastet ned` : ''}{g.zips
+									? ` · hele albumet ${g.zips === 1 ? 'én gang' : `${g.zips} ganger`}`
+									: ''} · sist {formatLocal(g.lastAt)}
+							</span>
 						</li>
 					{/each}
 				</ul>
-				<p class="hint">Lim filnavnene inn i Lightroom: Bibliotekfilter → Tekst → Filnavn → Inneholder.</p>
-			</div>
-		{/if}
+			{/if}
+		</section>
 
 		<div class="panel danger-zone">
 			<h2>Slett</h2>
@@ -899,6 +962,19 @@
 		font-size: 13px;
 		color: var(--warn);
 	}
+	.pick-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+		font-size: 14px;
+	}
+	.input.num {
+		width: 84px;
+	}
+	.favs form {
+		margin: 0;
+	}
 	.favs {
 		list-style: none;
 		margin: 0;
@@ -916,6 +992,35 @@
 	}
 	.favs .faint {
 		font-size: 13px;
+	}
+	.stat-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px 22px;
+	}
+	.stat-row div {
+		display: grid;
+	}
+	.stat-row strong {
+		font-size: 24px;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+		line-height: 1.2;
+	}
+	.stat-row span {
+		font-size: 12px;
+		color: var(--muted);
+	}
+	.guest-stats {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 8px;
+		font-size: 13px;
+	}
+	.guest-stats li {
+		display: grid;
 	}
 	.danger-zone {
 		border-color: rgba(255, 107, 94, 0.25);

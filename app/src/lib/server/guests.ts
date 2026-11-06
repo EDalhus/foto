@@ -23,6 +23,8 @@ export interface GroupRow {
 	/** Tilgangen slutter ved dette tidspunktet (null = aldri). */
 	expires_at: number | null;
 	download: GroupDownload;
+	/** Når gjestene fikk påminnelse om at tilgangen går ut (nullstilles når datoen endres). */
+	reminded_at: number | null;
 }
 
 export interface GuestRow {
@@ -100,12 +102,15 @@ export function createGroup(name: unknown, kind: unknown): string {
 export function updateGroup(id: string, patch: { name?: unknown; kind?: unknown; expires?: unknown; download?: unknown }) {
 	const g = getGroup(id);
 	if (!g) throw new HttpError(404, 'Gruppa finnes ikke.');
+	const expires = patch.expires !== undefined ? parseExpiry(patch.expires) : g.expires_at;
 	run(
-		`UPDATE groups SET name = ?, kind = ?, expires_at = ?, download = ? WHERE id = ?`,
+		`UPDATE groups SET name = ?, kind = ?, expires_at = ?, download = ?, reminded_at = ? WHERE id = ?`,
 		patch.name !== undefined ? cleanText(patch.name, 'Navn') : g.name,
 		patch.kind !== undefined ? kindOf(patch.kind) : g.kind,
-		patch.expires !== undefined ? parseExpiry(patch.expires) : g.expires_at,
+		expires,
 		patch.download !== undefined ? downloadOf(patch.download) : g.download,
+		// Ny dato: ny påminnelse når den nærmer seg.
+		expires === g.expires_at ? g.reminded_at : null,
 		id
 	);
 	invalidate();
@@ -258,24 +263,58 @@ export function setFavorite(userId: string, photoId: string, on: boolean) {
 	else run(`DELETE FROM favorites WHERE user_id = ? AND photo_id = ?`, userId, photoId);
 }
 
-export function markSubmitted(userId: string, albumId: string, count: number) {
-	run(
-		`INSERT INTO favorite_submissions (user_id, album_id, count, submitted_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT (user_id, album_id) DO UPDATE SET count = excluded.count, submitted_at = excluded.submitted_at`,
-		userId,
-		albumId,
-		count,
-		now()
+export function favoriteCount(userId: string, albumId: string): number {
+	return (
+		one<{ n: number }>(`SELECT count(*) AS n FROM favorites f JOIN photos p ON p.id = f.photo_id WHERE f.user_id = ? AND p.album_id = ?`, userId, albumId)?.n ?? 0
 	);
 }
 
+export function isFavorite(userId: string, photoId: string): boolean {
+	return !!one(`SELECT 1 FROM favorites WHERE user_id = ? AND photo_id = ?`, userId, photoId);
+}
+
+/** «Send valget»: lagrer når og hvor mange, og låser valget til fotografen låser det opp. */
+export function markSubmitted(userId: string, albumId: string, count: number) {
+	const t = now();
+	run(
+		`INSERT INTO favorite_submissions (user_id, album_id, count, submitted_at, locked_at) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (user_id, album_id) DO UPDATE SET count = excluded.count, submitted_at = excluded.submitted_at, locked_at = excluded.locked_at`,
+		userId,
+		albumId,
+		count,
+		t,
+		t
+	);
+}
+
+export interface Submission {
+	submittedAt: number;
+	lockedAt: number | null;
+	count: number;
+}
+
+export function submission(userId: string, albumId: string): Submission | null {
+	const r = one<{ submitted_at: number; locked_at: number | null; count: number }>(
+		`SELECT submitted_at, locked_at, count FROM favorite_submissions WHERE user_id = ? AND album_id = ?`,
+		userId,
+		albumId
+	);
+	return r ? { submittedAt: r.submitted_at, lockedAt: r.locked_at, count: r.count } : null;
+}
+
 export function submittedAt(userId: string, albumId: string): number | null {
-	return one<{ submitted_at: number }>(`SELECT submitted_at FROM favorite_submissions WHERE user_id = ? AND album_id = ?`, userId, albumId)?.submitted_at ?? null;
+	return submission(userId, albumId)?.submittedAt ?? null;
+}
+
+/** Fotografen låser opp, så gjesten kan endre valget og sende det på nytt. */
+export function unlockSubmission(userId: string, albumId: string): boolean {
+	return run(`UPDATE favorite_submissions SET locked_at = NULL WHERE user_id = ? AND album_id = ? AND locked_at IS NOT NULL`, userId, albumId).changes > 0;
 }
 
 export interface FavoriteSummary {
 	user: { id: string; name: string; email: string };
 	submittedAt: number | null;
+	lockedAt: number | null;
 	photos: { id: string; filename: string }[];
 }
 
@@ -291,7 +330,8 @@ export function favoritesInAlbum(albumId: string): FavoriteSummary[] {
 	for (const r of rows) {
 		let s = byUser.get(r.user_id);
 		if (!s) {
-			s = { user: { id: r.user_id, name: r.name, email: r.email }, submittedAt: submittedAt(r.user_id, albumId), photos: [] };
+			const sub = submission(r.user_id, albumId);
+			s = { user: { id: r.user_id, name: r.name, email: r.email }, submittedAt: sub?.submittedAt ?? null, lockedAt: sub?.lockedAt ?? null, photos: [] };
 			byUser.set(r.user_id, s);
 		}
 		s.photos.push({ id: r.photo_id, filename: r.filename });

@@ -12,9 +12,11 @@ Kjører i dag på **https://foto.dalhus.net**.
 - **Offentlig, privat eller kunde rett fra albumet.** På albumsiden i admin velger du hvem som ser albumet. Under «Kunde» skriver du inn navn og e-post, så lages kunden, albumet blir privat og invitasjonen sendes – og du styrer nedlasting, utløpsdato og innloggingslenker der. Under «Privat» deler du med grupper med ett klikk eller lager en ny.
 - **Forsidebilde** velges i en bildevelger (også for mapper, blant bildene i albumene i mappa), fra bildene i albumet, eller med stjernen i bildevisningen når du er logget inn.
 - **Biblioteket** viser forsidebilder og hvem som ser hva, kan filtreres (offentlige, private, kunder) og søkes i, og du kan gjøre flere album offentlige eller private, dele dem eller flytte dem på en gang.
-- **Kunden velger bilder.** Gjester trykker på hjertet på bildene de liker og sender valget. Du får e-post med filnavnene (klare til å lime inn i Lightroom-filteret), og valget står på albumsiden i admin.
+- **Kunden velger bilder.** Gjester trykker på hjertet på bildene de liker og sender valget. Du får e-post med filnavnene (klare til å lime inn i Lightroom-filteret), og valget står på albumsiden i admin. Albumet kan ha «velg N bilder» (gjesten ser «12 av 30 valgt» og kan ikke velge flere), og valget låses når det er sendt – du kan låse det opp igjen fra albumsiden.
 - **Utløpsdato og nedlasting per gruppe.** En gruppe kan ha «tilgang til og med» en dato, og kan få lov til å laste ned (eller ikke) uavhengig av albumet – f.eks. nedlasting først når kunden har betalt. Nye kundegrupper kan ikke laste ned før du sier ja.
+- **Påminnelse før tilgangen går ut.** Gjester i grupper med «tilgang til og med» får en e-post med en lenke som logger dem rett inn, noen dager før (standard 3, under **Administrer → Innstillinger**).
 - **Varsler til deg** når en gjest logger inn første gang og når noen sender valget sitt (til `NOTIFY_EMAIL`, ellers admin-adressen; `NOTIFY_EMAIL=off` slår av).
+- **Statistikk** under **Administrer → Statistikk**: visninger og nedlastinger per dag og per album, og hva hver gjest har sett og lastet ned (også på kundekortene). Ingen informasjonskapsler, ingen lagrede IP-adresser; du selv og roboter telles ikke.
 - **Søk** i titler, bildetekster, stikkord og filnavn, og i navn på album og mapper. Bare det brukeren har tilgang til, vises.
 - **Bildevisning** som zoomer ut fra miniatyren og tilbake når den lukkes – siden står da ved bildet du så sist. Dra ned for å lukke på mobil. **Lysbildefremvisning** (mellomrom eller ▶), i fullskjerm der nettleseren støtter det.
 - **Vannmerke** (valgfritt, under **Administrer → Innstillinger**) på offentlige bilder. Du og gjester i private album ser bildene uten. Vannmerkede versjoner lages første gang de trengs.
@@ -87,6 +89,7 @@ Sett `SMTP_HOST`, `SMTP_PORT` og `MAIL_FROM` (eventuelt `SMTP_USER`/`SMTP_PASS`,
 cd app && npm run build && node test/gjester.test.mjs   # gjester, lenker og tilgang
 node test/forbedringer.test.mjs                         # favoritter, utløp, nedlasting per gruppe, varsler, søk, vannmerke
 node test/admin.test.mjs                                # forsidebilde, offentlig/privat/kunde, grupper, biblioteket
+node test/kunder.test.mjs                               # «velg N bilder», låst valg, påminnelser, statistikk
 cd lightroom/test && bash kjor.sh                          # Lightroom-pluginen
 ```
 
@@ -118,6 +121,8 @@ Alle kall krever `Authorization: Bearer <API-nøkkel>` (eller innlogget økt fra
 | `PATCH` / `DELETE` | `/api/v1/photos/:id` | Endre tittel/bildetekst, eller slett |
 | `POST` | `/api/v1/albums/:id/order` | Rekkefølge: `{ "photoIds": [...] }` |
 | `POST` | `/api/v1/albums/:id/cover` | Forsidebilde: `{ "photo": "<id>" }`, eller `null` for automatisk |
+| `POST` | `/api/v1/favorites` | Gjest: hjerte på/av `{ "photo", "on" }` (423 når valget er låst, 409 når «velg N» er nådd) |
+| `POST` | `/api/v1/stats/view` | Teller en visning av en mappe/et album `{ "node" }` (sendes av nettsiden selv) |
 | `POST` | `/api/v1/lr/sync` | Finn/opprett mappe eller album ut fra Lightroom-ID-er |
 | `POST` | `/api/v1/lr/delete-collection` | Slett mappe/album |
 | `POST` | `/api/v1/lr/delete-photos` | Slett flere bilder: `{ "ids": [...] }` |

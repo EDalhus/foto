@@ -15,6 +15,7 @@
 		photos,
 		albumName = '',
 		favorites = null,
+		favoritesLocked = false,
 		ontogglefavorite,
 		coverId = null,
 		onsetcover
@@ -22,6 +23,8 @@
 		photos: PhotoView[];
 		albumName?: string;
 		favorites?: Set<string> | null;
+		/** Valget er sendt: hjertene vises, men kan ikke endres. */
+		favoritesLocked?: boolean;
 		ontogglefavorite?: (id: string) => void;
 		/** Administrator: albumets forsidebilde, og hvordan det byttes fra visningen. */
 		coverId?: string | null;
@@ -126,7 +129,7 @@
 </script>
 
 <div bind:this={root}>
-	<JustifiedGrid {photos} onopen={open} {favorites} {ontogglefavorite} />
+	<JustifiedGrid {photos} onopen={open} {favorites} {favoritesLocked} {ontogglefavorite} />
 </div>
 
 {#if openIndex >= 0}
@@ -135,6 +138,7 @@
 		index={openIndex}
 		{albumName}
 		{favorites}
+		{favoritesLocked}
 		{ontogglefavorite}
 		{thumb}
 		{coverId}

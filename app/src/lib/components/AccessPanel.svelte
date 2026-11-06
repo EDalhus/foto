@@ -14,11 +14,14 @@
 	let {
 		node,
 		access,
-		mailReady
+		mailReady,
+		activity = {}
 	}: {
 		node: { id: string; type: 'folder' | 'album'; allowDownload: boolean };
 		access: { mode: AccessMode; privateVia: string | null; groups: GroupAccessView[] };
 		mailReady: boolean;
+		/** Hva hver gjest har sett og lastet ned her (bruker-id → tall). */
+		activity?: Record<string, { views: number; downloads: number; zips: number; lastAt: number }>;
 	} = $props();
 
 	const isAlbum = $derived(node.type === 'album');
@@ -146,7 +149,7 @@
 		{#if shared.length}
 			<div class="cards">
 				{#each shared as g (g.id)}
-					<GroupCard {g} client={g.kind === 'client'} albumDownload={node.allowDownload} {isAlbum} {mailReady} />
+					<GroupCard {g} client={g.kind === 'client'} albumDownload={node.allowDownload} {isAlbum} {mailReady} {activity} />
 				{/each}
 			</div>
 		{/if}
@@ -196,7 +199,7 @@
 		{#if sharedClients.length}
 			<div class="cards">
 				{#each sharedClients as g (g.id)}
-					<GroupCard {g} client albumDownload={node.allowDownload} {isAlbum} {mailReady} />
+					<GroupCard {g} client albumDownload={node.allowDownload} {isAlbum} {mailReady} {activity} />
 				{/each}
 			</div>
 		{/if}

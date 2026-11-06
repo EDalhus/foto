@@ -65,6 +65,8 @@ export interface GroupAccessView {
 	download: 'album' | 'yes' | 'no';
 	expiresDate: string;
 	expired: boolean;
+	/** Når gjestene fikk påminnelse om at tilgangen går ut. */
+	remindedAt: number | null;
 	shared: boolean;
 	direct: boolean;
 	via: string | null;

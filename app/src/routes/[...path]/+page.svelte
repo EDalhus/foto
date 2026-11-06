@@ -1,17 +1,27 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import Breadcrumbs from '$lib/components/Breadcrumbs.svelte';
 	import CardGrid from '$lib/components/CardGrid.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Gallery from '$lib/components/Gallery.svelte';
 	import { formatDate, formatLocal, plural } from '$lib/format';
+	import { submit } from '$lib/submit';
 	import { toast } from '$lib/toasts.svelte';
 
-	let { data, form } = $props();
+	let { data } = $props();
 
 	const node = $derived(data.node);
+
+	// Statistikk: én melding når mappa/albumet faktisk vises (serveren teller samme besøkende én gang per halvtime).
+	$effect(() => {
+		const id = node.id;
+		if (data.isAdmin) return;
+		fetch('/api/v1/stats/view', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ node: id }) }).catch(
+			() => {}
+		);
+	});
 
 	// --- Favoritter (kunden velger bilder) ---
 	// Følger serverens liste, men kan endres lokalt med en gang (hjertet reagerer før svaret kommer).
@@ -54,7 +64,11 @@
 	}
 
 	const shown = $derived(onlyFavs && favorites ? sorted.filter((p) => favs.has(p.id)) : sorted);
-	let favError = $state('');
+	// «Velg N bilder» og låst valg (etter at det er sendt).
+	const locked = $derived(!!data.favorites?.lockedAt);
+	const target = $derived(data.favorites?.target ?? null);
+	const full = $derived(!!target && favs.size >= target);
+	let confirmSend = $state(false);
 
 	// --- Forsidebilde fra bildevisningen (bare for administratoren) ---
 	// Gjelder bare albumet det ble valgt i (siden gjenbrukes når man går til et annet album).
@@ -77,24 +91,36 @@
 
 	async function toggleFavorite(id: string) {
 		const on = !favs.has(id);
+		if (locked) {
+			toast('Valget er sendt og låst. Ta kontakt med fotografen hvis du vil endre det.', 'info');
+			return;
+		}
+		if (on && target && favs.size >= target) {
+			toast(`Du har valgt ${favs.size} av ${target}. Fjern et bilde før du velger et nytt.`, 'info');
+			return;
+		}
 		const next = new Set(favs);
 		if (on) next.add(id);
 		else next.delete(id);
 		favs = next;
-		favError = '';
+		confirmSend = false;
 		try {
 			const res = await fetch('/api/v1/favorites', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ photo: id, on })
 			});
-			if (!res.ok) throw new Error(String(res.status));
-		} catch {
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				if (res.status === 423) invalidateAll();
+				throw new Error(body?.error ?? '');
+			}
+		} catch (err) {
 			const back = new Set(favs);
 			if (on) back.delete(id);
 			else back.add(id);
 			favs = back;
-			favError = 'Klarte ikke å lagre favoritten. Sjekk nettet og prøv igjen.';
+			toast((err as Error).message || 'Klarte ikke å lagre favoritten. Sjekk nettet og prøv igjen.', 'error');
 		}
 	}
 	$effect(() => {
@@ -192,32 +218,55 @@
 		</div>
 
 		{#if data.favorites}
-			<div class="picks" aria-live="polite">
+			<div class="picks" class:locked aria-live="polite">
 				<div class="picks-text">
-					<Icon name="heart" size={16} filled={favs.size > 0} />
-					{#if favs.size}
+					{#if locked}
+						<span class="done"><Icon name="check" size={16} /></span>
+						<strong>Valget er sendt</strong>
+						<span>{plural(favs.size, 'bilde', 'bilder')} · {formatLocal(data.favorites.lockedAt)}. Ta kontakt med fotografen hvis du vil endre det.</span>
+					{:else if target}
+						<Icon name="heart" size={16} filled={favs.size > 0} />
+						<strong>{favs.size} av {target} valgt</strong>
+						<span class="meter" class:full role="progressbar" aria-valuemin={0} aria-valuemax={target} aria-valuenow={favs.size} aria-label="Valgt"
+							><i style:width="{Math.min(100, (favs.size / target) * 100)}%"></i></span
+						>
+						{#if favs.size === 0}
+							<span>Trykk på hjertet på de {target} bildene du vil ha.</span>
+						{:else if full}
+							<span>Alle er valgt – send valget når du er klar.</span>
+						{/if}
+					{:else if favs.size}
+						<Icon name="heart" size={16} filled />
 						<strong>{plural(favs.size, 'favoritt', 'favoritter')}</strong>
 						{#if data.favorites.submittedAt}<span class="faint">· sendt {formatLocal(data.favorites.submittedAt)}</span>{/if}
 					{:else}
+						<Icon name="heart" size={16} />
 						<span>Trykk på hjertet på bildene du liker, og send valget når du er ferdig.</span>
 					{/if}
 				</div>
 				{#if favs.size}
 					<div class="picks-actions">
 						<button class="btn ghost" type="button" onclick={() => (onlyFavs = !onlyFavs)} aria-pressed={onlyFavs}>
-							{onlyFavs ? 'Vis alle bildene' : 'Vis bare favorittene'}
+							{onlyFavs ? 'Vis alle bildene' : 'Vis bare valgte'}
 						</button>
-						<form method="POST" action="?/sendFavorites" use:enhance={() => async ({ update }) => update({ reset: false })}>
-							<button class="btn primary" type="submit"><Icon name="send" size={16} /> {data.favorites.submittedAt ? 'Send valget på nytt' : 'Send valget'}</button>
-						</form>
+						{#if !locked}
+							{#if confirmSend}
+								<form method="POST" action="?/sendFavorites" class="confirm" use:enhance={submit({ onsuccess: () => (confirmSend = false) })}>
+									<span>Du har valgt {favs.size} av {target}. Sende likevel?</span>
+									<button class="btn primary" type="submit"><Icon name="send" size={16} /> Send likevel</button>
+									<button class="btn ghost" type="button" onclick={() => (confirmSend = false)}>Velg flere</button>
+								</form>
+							{:else if target && favs.size < target}
+								<button class="btn primary" type="button" onclick={() => (confirmSend = true)}><Icon name="send" size={16} /> Send valget</button>
+							{:else}
+								<form method="POST" action="?/sendFavorites" use:enhance={submit()}>
+									<button class="btn primary" type="submit"><Icon name="send" size={16} /> {data.favorites.submittedAt ? 'Send valget på nytt' : 'Send valget'}</button>
+								</form>
+							{/if}
+						{/if}
 					</div>
 				{/if}
 			</div>
-			{#if favError}<p class="notice error" role="alert">{favError}</p>{/if}
-			{#if form && 'error' in form && form.error}<p class="notice error" role="alert">{form.error}</p>{/if}
-			{#if form && 'sent' in form && form.sent}
-				<p class="notice success" role="status">Takk! Valget ditt ({plural(form.sent, 'bilde', 'bilder')}) er sendt. Du kan fortsatt endre det og sende på nytt.</p>
-			{/if}
 		{/if}
 	</header>
 
@@ -232,6 +281,7 @@
 			photos={shown}
 			albumName={node.name}
 			{favorites}
+			favoritesLocked={locked}
 			ontogglefavorite={toggleFavorite}
 			coverId={data.isAdmin ? (coverOverride ?? data.coverId) : null}
 			onsetcover={data.isAdmin ? setCover : undefined}
@@ -369,5 +419,49 @@
 	}
 	.picks-actions form {
 		margin: 0;
+	}
+	.picks.locked {
+		border-color: rgba(99, 210, 151, 0.35);
+	}
+	.done {
+		display: inline-grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		border-radius: 999px;
+		background: rgba(99, 210, 151, 0.16);
+		color: var(--ok);
+	}
+	.picks-text .done :global(svg) {
+		color: var(--ok);
+	}
+	.meter {
+		position: relative;
+		display: inline-block;
+		width: 96px;
+		height: 6px;
+		border-radius: 999px;
+		background: var(--surface-3);
+		overflow: hidden;
+	}
+	.meter i {
+		position: absolute;
+		inset: 0 auto 0 0;
+		border-radius: inherit;
+		background: #ff6b81;
+		transition: width 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+	}
+	.meter.full i {
+		background: var(--ok);
+	}
+	.confirm {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px;
+	}
+	.confirm span {
+		color: var(--muted);
+		font-size: 14px;
 	}
 </style>

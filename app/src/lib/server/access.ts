@@ -93,6 +93,7 @@ export function accessDetails(node: TreeNode): {
 			download: g.download,
 			expiresDate: expiryDate(g.expires_at),
 			expired: !!g.expires_at && g.expires_at <= t,
+			remindedAt: g.reminded_at,
 			shared: !!s,
 			direct: !!s && s.via === null,
 			via: s?.via ?? null,
